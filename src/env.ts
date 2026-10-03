@@ -1,0 +1,49 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export type Env = Readonly<Record<string, string | undefined>>;
+
+/**
+ * Read a required env var. Empty string is treated the same as unset.
+ * If `fallback` is supplied, returns it instead of throwing on absence.
+ */
+export function requireEnv(env: Env, name: string, fallback?: string): string {
+  const v = env[name];
+  if (v === undefined || v === '') {
+    if (fallback !== undefined) {
+      return fallback;
+    }
+    throw new Error(`Missing required env var: ${name}`);
+  }
+  return v;
+}
+
+/** Optional env var; empty string counts as unset. */
+export function optionalEnv(env: Env, name: string): string | undefined {
+  const v = env[name];
+  return v === undefined || v === '' ? undefined : v;
+}
+
+/**
+ * Load `.env` files into `process.env` for each existing path, in order.
+ * Earlier entries win — `process.loadEnvFile` is a no-op for keys that are
+ * already set. Missing or unreadable files are silently skipped.
+ */
+export function loadEnvFiles(paths: readonly string[]): string[] {
+  const loaded: string[] = [];
+  for (const p of paths) {
+    try {
+      process.loadEnvFile(p);
+      loaded.push(p);
+    } catch {
+      // File missing or unreadable — fine, fall through to the next candidate.
+    }
+  }
+  return loaded;
+}
+
+/** `.env` colocated with the source tree (one level up from `src/`). */
+export function defaultEnvCandidates(metaUrl: string): string[] {
+  const here = dirname(fileURLToPath(metaUrl));
+  return [join(here, '..', '.env')];
+}

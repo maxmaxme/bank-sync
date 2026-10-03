@@ -1,0 +1,404 @@
+import { DatabaseSync } from 'node:sqlite';
+import { MIGRATIONS } from './migrations.ts';
+import type {
+  AccountRow,
+  AccountView,
+  SessionRow,
+  Store,
+  SyncRun,
+  TransactionRow,
+} from './types.ts';
+
+interface DbSession {
+  session_id: string;
+  aspsp_name: string;
+  aspsp_country: string;
+  valid_until: string;
+  created_at: number;
+  revoked_at: number | null;
+}
+
+interface DbAccount {
+  account_key: string;
+  uid: string;
+  session_id: string;
+  iban: string | null;
+  name: string | null;
+  currency: string | null;
+  balance_cents: number | null;
+  balance_currency: string | null;
+  last_synced_at: number | null;
+  last_error: string | null;
+  initial_sync_done: number;
+}
+
+interface DbAccountView extends DbAccount {
+  aspsp_name: string;
+  valid_until: string;
+  revoked_at: number | null;
+}
+
+interface DbTransaction {
+  account_key: string;
+  tx_key: string;
+  status: string;
+  booking_date: string | null;
+  value_date: string | null;
+  transaction_date: string | null;
+  tx_date: string | null;
+  amount_cents: number;
+  currency: string;
+  counterparty: string | null;
+  description: string | null;
+  raw: string;
+  first_seen_at: number;
+  updated_at: number;
+}
+
+interface DbSyncRun {
+  id: number;
+  trigger: string;
+  started_at: number;
+  finished_at: number | null;
+  ok: number | null;
+  added: number | null;
+  error: string | null;
+}
+
+function toSession(r: DbSession): SessionRow {
+  return {
+    sessionId: r.session_id,
+    aspspName: r.aspsp_name,
+    aspspCountry: r.aspsp_country,
+    validUntil: r.valid_until,
+    createdAt: r.created_at,
+    revokedAt: r.revoked_at,
+  };
+}
+
+function toAccount(r: DbAccount): AccountRow {
+  return {
+    accountKey: r.account_key,
+    uid: r.uid,
+    sessionId: r.session_id,
+    iban: r.iban,
+    name: r.name,
+    currency: r.currency,
+    balanceCents: r.balance_cents,
+    balanceCurrency: r.balance_currency,
+    lastSyncedAt: r.last_synced_at,
+    lastError: r.last_error,
+    initialSyncDone: r.initial_sync_done === 1,
+  };
+}
+
+function toTransaction(r: DbTransaction): TransactionRow {
+  return {
+    accountKey: r.account_key,
+    txKey: r.tx_key,
+    status: r.status,
+    bookingDate: r.booking_date,
+    valueDate: r.value_date,
+    transactionDate: r.transaction_date,
+    txDate: r.tx_date,
+    amountCents: r.amount_cents,
+    currency: r.currency,
+    counterparty: r.counterparty,
+    description: r.description,
+    raw: r.raw,
+    firstSeenAt: r.first_seen_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function migrate(db: DatabaseSync): void {
+  const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
+  for (let v = row.user_version; v < MIGRATIONS.length; v++) {
+    db.exec('BEGIN');
+    try {
+      db.exec(MIGRATIONS[v] as string);
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+}
+
+export function openStore(path: string): Store {
+  const db = new DatabaseSync(path);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
+  migrate(db);
+
+  function inTransaction<T>(fn: () => T): T {
+    db.exec('BEGIN');
+    try {
+      const result = fn();
+      db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  const upsertTx = db.prepare(
+    `INSERT INTO transactions (
+       account_key, tx_key, status, booking_date, value_date, transaction_date, tx_date,
+       amount_cents, currency, counterparty, description, raw, first_seen_at, updated_at
+     ) VALUES (
+       @account_key, @tx_key, @status, @booking_date, @value_date, @transaction_date, @tx_date,
+       @amount_cents, @currency, @counterparty, @description, @raw, @now, @now
+     )
+     ON CONFLICT (account_key, tx_key) DO UPDATE SET
+       status = excluded.status,
+       booking_date = excluded.booking_date,
+       value_date = excluded.value_date,
+       transaction_date = excluded.transaction_date,
+       tx_date = excluded.tx_date,
+       amount_cents = excluded.amount_cents,
+       currency = excluded.currency,
+       counterparty = excluded.counterparty,
+       description = excluded.description,
+       raw = excluded.raw,
+       updated_at = excluded.updated_at`,
+  );
+
+  return {
+    saveAuthRequest(nonce, now) {
+      db.prepare('INSERT INTO auth_requests (nonce, created_at) VALUES (?, ?)').run(nonce, now);
+    },
+
+    takeAuthRequest(nonce, maxAgeMs, now) {
+      // Opportunistic cleanup so abandoned connect attempts don't pile up.
+      db.prepare('DELETE FROM auth_requests WHERE created_at < ?').run(now - maxAgeMs);
+      const res = db.prepare('DELETE FROM auth_requests WHERE nonce = ?').run(nonce);
+      return Number(res.changes) === 1;
+    },
+
+    saveSession(session, accounts) {
+      inTransaction(() => {
+        db.prepare(
+          `INSERT INTO sessions (session_id, aspsp_name, aspsp_country, valid_until, created_at, revoked_at)
+           VALUES (?, ?, ?, ?, ?, NULL)
+           ON CONFLICT (session_id) DO UPDATE SET valid_until = excluded.valid_until`,
+        ).run(
+          session.sessionId,
+          session.aspspName,
+          session.aspspCountry,
+          session.validUntil,
+          session.createdAt,
+        );
+        const upsertAccount = db.prepare(
+          `INSERT INTO accounts (account_key, uid, session_id, iban, name, currency)
+           VALUES (@account_key, @uid, @session_id, @iban, @name, @currency)
+           ON CONFLICT (account_key) DO UPDATE SET
+             uid = excluded.uid,
+             session_id = excluded.session_id,
+             iban = excluded.iban,
+             name = excluded.name,
+             currency = excluded.currency,
+             last_error = NULL,
+             -- Fresh consent: banks typically serve deep history only right after
+             -- authorisation, so take another long look back.
+             initial_sync_done = 0`,
+        );
+        for (const a of accounts) {
+          upsertAccount.run({
+            account_key: a.accountKey,
+            uid: a.uid,
+            session_id: session.sessionId,
+            iban: a.iban,
+            name: a.name,
+            currency: a.currency,
+          });
+        }
+      });
+    },
+
+    revokeSession(sessionId, now) {
+      db.prepare('UPDATE sessions SET revoked_at = ? WHERE session_id = ?').run(now, sessionId);
+    },
+
+    listSessions() {
+      const rows = db
+        .prepare('SELECT * FROM sessions ORDER BY created_at DESC')
+        .all() as unknown as DbSession[];
+      return rows.map(toSession);
+    },
+
+    activeAccounts(now) {
+      const rows = db
+        .prepare(
+          `SELECT a.* FROM accounts a JOIN sessions s USING (session_id)
+           WHERE s.revoked_at IS NULL AND s.valid_until > ?
+           ORDER BY a.account_key`,
+        )
+        .all(new Date(now).toISOString()) as unknown as DbAccount[];
+      return rows.map(toAccount);
+    },
+
+    listAccounts() {
+      const rows = db
+        .prepare(
+          `SELECT a.*, s.aspsp_name, s.valid_until, s.revoked_at
+           FROM accounts a JOIN sessions s USING (session_id)
+           ORDER BY a.account_key`,
+        )
+        .all() as unknown as DbAccountView[];
+      return rows.map(
+        (r): AccountView => ({
+          ...toAccount(r),
+          aspspName: r.aspsp_name,
+          validUntil: r.valid_until,
+          revokedAt: r.revoked_at,
+        }),
+      );
+    },
+
+    recordAccountSync(accountKey, result, now) {
+      if (result.ok) {
+        db.prepare(
+          `UPDATE accounts SET
+             balance_cents = COALESCE(?, balance_cents),
+             balance_currency = COALESCE(?, balance_currency),
+             last_synced_at = ?, last_error = NULL, initial_sync_done = 1
+           WHERE account_key = ?`,
+        ).run(result.balanceCents, result.balanceCurrency, now, accountKey);
+      } else {
+        db.prepare('UPDATE accounts SET last_error = ? WHERE account_key = ?').run(
+          result.error,
+          accountKey,
+        );
+      }
+    },
+
+    latestTxDate(accountKey) {
+      const row = db
+        .prepare(
+          `SELECT MAX(tx_date) AS d FROM transactions WHERE account_key = ? AND status = 'BOOK'`,
+        )
+        .get(accountKey) as { d: string | null } | undefined;
+      return row?.d ?? null;
+    },
+
+    applyTransactions(accountKey, dateFrom, txs, now) {
+      return inTransaction(() => {
+        const existing = new Set(
+          (
+            db
+              .prepare(
+                `SELECT tx_key FROM transactions
+                 WHERE account_key = ? AND (tx_date IS NULL OR tx_date >= ?)`,
+              )
+              .all(accountKey, dateFrom) as unknown as { tx_key: string }[]
+          ).map((r) => r.tx_key),
+        );
+        db.prepare(
+          `DELETE FROM transactions
+           WHERE account_key = ? AND status = 'PDNG' AND (tx_date IS NULL OR tx_date >= ?)`,
+        ).run(accountKey, dateFrom);
+
+        let added = 0;
+        for (const t of txs) {
+          if (!existing.has(t.txKey)) {
+            added++;
+          }
+          upsertTx.run({
+            account_key: accountKey,
+            tx_key: t.txKey,
+            status: t.status,
+            booking_date: t.bookingDate,
+            value_date: t.valueDate,
+            transaction_date: t.transactionDate,
+            tx_date: t.txDate,
+            amount_cents: t.amountCents,
+            currency: t.currency,
+            counterparty: t.counterparty,
+            description: t.description,
+            raw: t.raw,
+            now,
+          });
+        }
+        return added;
+      });
+    },
+
+    queryTransactions(q) {
+      const where: string[] = [];
+      const params: (string | number)[] = [];
+      if (q.from) {
+        where.push('tx_date >= ?');
+        params.push(q.from);
+      }
+      if (q.to) {
+        where.push('tx_date <= ?');
+        params.push(q.to);
+      }
+      if (q.accountKey) {
+        where.push('account_key = ?');
+        params.push(q.accountKey);
+      }
+      const sql =
+        `SELECT * FROM transactions` +
+        (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+        ` ORDER BY tx_date DESC, first_seen_at DESC` +
+        (q.limit ? ` LIMIT ${Math.max(1, Math.floor(q.limit))}` : '');
+      const rows = db.prepare(sql).all(...params) as unknown as DbTransaction[];
+      return rows.map(toTransaction);
+    },
+
+    startSyncRun(trigger, now) {
+      const res = db
+        .prepare('INSERT INTO sync_runs (trigger, started_at) VALUES (?, ?)')
+        .run(trigger, now);
+      return Number(res.lastInsertRowid);
+    },
+
+    finishSyncRun(id, result, now) {
+      db.prepare('UPDATE sync_runs SET finished_at = ?, ok = ?, added = ?, error = ? WHERE id = ?').run(
+        now,
+        result.ok ? 1 : 0,
+        result.added,
+        result.error,
+        id,
+      );
+    },
+
+    recentSyncRuns(limit) {
+      const rows = db
+        .prepare('SELECT * FROM sync_runs ORDER BY id DESC LIMIT ?')
+        .all(limit) as unknown as DbSyncRun[];
+      return rows.map(
+        (r): SyncRun => ({
+          id: r.id,
+          trigger: r.trigger,
+          startedAt: r.started_at,
+          finishedAt: r.finished_at,
+          ok: r.ok === null ? null : r.ok === 1,
+          added: r.added,
+          error: r.error,
+        }),
+      );
+    },
+
+    getKv(key) {
+      const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as
+        | { value: string }
+        | undefined;
+      return row?.value ?? null;
+    },
+
+    setKv(key, value) {
+      db.prepare(
+        'INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+      ).run(key, value);
+    },
+
+    close() {
+      db.close();
+    },
+  };
+}

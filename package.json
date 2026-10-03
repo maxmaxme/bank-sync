@@ -1,0 +1,26 @@
+{
+  "name": "bank-sync",
+  "version": "0.1.0",
+  "description": "Self-hosted bank transaction sync over Enable Banking (PSD2) into SQLite, with a tiny web UI and JSON/CSV export",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "pino": "^9.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^3.2.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

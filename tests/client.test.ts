@@ -1,0 +1,85 @@
+import { generateKeyPairSync, verify } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import { EnableBankingClient, EnableBankingError } from '../src/enablebanking/client.ts';
+import { signAppJwt } from '../src/enablebanking/jwt.ts';
+
+const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+const NOW = Date.UTC(2026, 9, 3, 12, 0, 0);
+
+function decode(part: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));
+}
+
+describe('signAppJwt', () => {
+  it('produces a verifiable RS256 token with the claims Enable Banking expects', () => {
+    const jwt = signAppJwt('app-123', pem, NOW);
+    const [h, p, s] = jwt.split('.') as [string, string, string];
+    expect(decode(h)).toEqual({ typ: 'JWT', alg: 'RS256', kid: 'app-123' });
+    expect(decode(p)).toEqual({
+      iss: 'enablebanking.com',
+      aud: 'api.enablebanking.com',
+      iat: NOW / 1000,
+      exp: NOW / 1000 + 3600,
+    });
+    expect(verify('sha256', Buffer.from(`${h}.${p}`), publicKey, Buffer.from(s, 'base64url'))).toBe(true);
+  });
+});
+
+describe('EnableBankingClient', () => {
+  function clientWith(handler: (url: URL, init: RequestInit) => Response) {
+    const calls: { url: URL; init: RequestInit }[] = [];
+    const client = new EnableBankingClient({
+      appId: 'app-123',
+      privateKeyPem: pem,
+      now: () => NOW,
+      fetch: (async (input: URL, init: RequestInit) => {
+        calls.push({ url: input, init });
+        return handler(input, init);
+      }) as typeof fetch,
+    });
+    return { client, calls };
+  }
+
+  it('sends date_from, continuation_key and strategy, omitting unset params', async () => {
+    const { client, calls } = clientWith(() => Response.json({ transactions: [], continuation_key: null }));
+    await client.getTransactions('acc-1', { dateFrom: '2026-01-01', strategy: 'longest' });
+    const url = calls[0]?.url;
+    expect(url?.pathname).toBe('/accounts/acc-1/transactions');
+    expect(Object.fromEntries(url?.searchParams ?? [])).toEqual({
+      date_from: '2026-01-01',
+      strategy: 'longest',
+    });
+    expect((calls[0]?.init.headers as Record<string, string>).authorization).toMatch(/^Bearer ey/);
+  });
+
+  it('posts the auth request in the documented shape', async () => {
+    const { client, calls } = clientWith(() => Response.json({ url: 'https://bank/x', authorization_id: 'a' }));
+    await client.startAuth({
+      aspsp: { name: 'imagin', country: 'ES' },
+      validUntil: new Date(NOW + 1000),
+      state: 's',
+      redirectUrl: 'https://example.com/cb',
+    });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      access: { valid_until: new Date(NOW + 1000).toISOString() },
+      aspsp: { name: 'imagin', country: 'ES' },
+      state: 's',
+      redirect_url: 'https://example.com/cb',
+      psu_type: 'personal',
+    });
+  });
+
+  it('turns ErrorResponse bodies into EnableBankingError', async () => {
+    const { client } = clientWith(() =>
+      Response.json(
+        { message: 'ASPSP Rate limit exceeded', code: 429, error: 'ASPSP_RATE_LIMIT_EXCEEDED', detail: null },
+        { status: 429 },
+      ),
+    );
+    const err = await client.getBalances('acc-1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EnableBankingError);
+    expect(err).toMatchObject({ status: 429, code: 'ASPSP_RATE_LIMIT_EXCEEDED' });
+    expect((err as Error).message).toContain('ASPSP Rate limit exceeded');
+  });
+});
