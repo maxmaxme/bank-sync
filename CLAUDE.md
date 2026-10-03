@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Long-running Node/TS service that pulls bank transactions over the
 Enable Banking PSD2 API into SQLite. One process: a `node:http` web UI
 (connect bank / status / manual sync / JSON + CSV export) plus an
-in-process scheduler. Personal use, restricted-production Enable Banking
-app (free, own accounts only). Primary bank: imagin (Spain).
+in-process scheduler. Optionally pushes booked transactions into ZenMoney
+after every sync. Personal use, restricted-production Enable Banking app
+(free, own accounts only). Primary bank: imagin (Spain).
 
 CI publishes `ghcr.io/maxmaxme/bank-sync:latest` (and `:sha-<short>`,
 arm64) on every push to `main`. Deployment is someone else's job.
@@ -67,6 +68,18 @@ only for `docs/callback.html`, a static GitHub-Pages bounce page that
 forwards to `<returnBase>/callback` for LAN-ish hosts. `POST /callback`
 accepts a pasted URL as the manual fallback.
 
+**ZenMoney export** (`src/zenmoney/`). API reference:
+<https://github.com/zenmoney/ZenPlugins/wiki/ZenMoney-API>. Everything goes
+through `POST /v8/diff/`; we send `serverTimestamp = now` so the server
+doesn't stream the user's whole history back, with `forceFetch` for the
+account/instrument tables. Token comes from zerro.app (`zm_token`) and is
+bound to one server (`zm_server`: ru | app). Invariants: only `BOOK` rows,
+never pending; ZenMoney ids are `zmIdFor(accountKey, txKey)` (deterministic,
+so retries can't duplicate); a row is marked `zm_pushed_at` only after the
+diff call succeeds; currency mismatch is an error, never a silent
+conversion. Account mapping + start date live in `accounts.zm_account_id /
+zm_since`, set from the UI. Runs as `Syncer`'s `afterRun` hook.
+
 **This repo is public.** Keep host names, deployment paths and other
 infra specifics out of code, docs and commit messages.
 
@@ -87,6 +100,7 @@ src/money.ts              # decimal string ↔ integer cents
 src/scheduler.ts          # 10-min tick: consent-expiry reminders + due sync
 src/storage/              # node:sqlite store; migrations tracked in PRAGMA user_version (append-only)
 src/notify/               # Telegram (optional) / NullNotifier
+src/zenmoney/             # ZenMoney client (diff, suggest) + exporter
 src/web/                  # node:http routes + server-rendered HTML
 docs/callback.html        # optional HTTPS bounce page for the redirect URL
 tests/                    # vitest, one file per module

@@ -32,4 +32,10 @@ export class RecordingNotifier implements Notifier {
   async consentExpired(input: { aspsp: string }) {
     this.events.push(`expired:${input.aspsp}`);
   }
+  async exportFailed(error: string, tokenExpired: boolean) {
+    this.events.push(`export-failed:${tokenExpired ? 'auth' : error}`);
+  }
+  async exportRecovered() {
+    this.events.push('export-recovered');
+  }
 }

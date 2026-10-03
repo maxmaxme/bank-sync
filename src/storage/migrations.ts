@@ -64,4 +64,12 @@ export const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  `
+  -- ZenMoney export: which ZenMoney account a bank account feeds, from which
+  -- date, and which rows have already been written there.
+  ALTER TABLE accounts ADD COLUMN zm_account_id TEXT;
+  ALTER TABLE accounts ADD COLUMN zm_since TEXT;
+  ALTER TABLE transactions ADD COLUMN zm_id TEXT;
+  ALTER TABLE transactions ADD COLUMN zm_pushed_at INTEGER;
+  `,
 ];

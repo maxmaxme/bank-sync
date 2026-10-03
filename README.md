@@ -12,7 +12,9 @@ One small container:
   trigger a sync, revoke access;
 - **scheduler** — pulls new transactions every few hours;
 - **API** — `GET /api/transactions` (JSON) and `GET /export.csv` for
-  whatever expense tracker you feed.
+  whatever expense tracker you feed;
+- **ZenMoney export** (optional) — new booked transactions are written
+  straight into a ZenMoney account after every sync.
 
 No auth of its own — put it behind your reverse proxy / SSO.
 
@@ -92,6 +94,32 @@ Open the UI **on your phone**, pick the bank, approve in the bank's app.
 Desktop works for most banks too, but imagin hands the approval to its
 mobile app.
 
+## ZenMoney export
+
+ZenMoney has no self-service API keys; its docs point to
+[zerro.app](https://zerro.app) instead. Sign in there, then in the browser
+console copy `localStorage.zm_token` → `ZENMONEY_TOKEN` and
+`localStorage.zm_server` → `ZENMONEY_SERVER` (`ru` or `app`).
+
+Then, in the UI's **ZenMoney** section, pick the ZenMoney account for each
+bank account (the one whose `syncID` ends with the IBAN's last 4 digits is
+preselected) and the date to export from — anything older is assumed to
+be in ZenMoney already. After that, every sync pushes the new rows:
+
+- only **booked** transactions; pending ones wait until the bank books
+  them, so nothing has to be rewritten later;
+- ZenMoney's own `/suggest` fills in the normalised payee, merchant and
+  category, the same guess its app makes for manual entries;
+- the ZenMoney id is derived from the row key, and exported rows are
+  marked in SQLite — a row is never sent twice, and a retry after a lost
+  response overwrites rather than duplicates;
+- transactions arrive unread (`viewed: false`), so the app shows them as
+  new; transfers between your own accounts come in as plain income /
+  expense — re-mark them in ZenMoney if you care.
+
+If the token stops working you get one Telegram message; put a fresh one
+into `ZENMONEY_TOKEN` and restart.
+
 ## Configuration
 
 | Var | Default | |
@@ -102,6 +130,8 @@ mobile app.
 | `EB_COUNTRY` | `ES` | banks listed in the picker |
 | `EB_ASPSP` | `imagin` | preselected bank (substring match) |
 | `SYNC_INTERVAL_HOURS` | `8` | |
+| `ZENMONEY_TOKEN` | — | enables the ZenMoney export |
+| `ZENMONEY_SERVER` | `ru` | `ru` or `app` — where the token was issued |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | optional notifications |
 | `BANK_SYNC_DATA_DIR` | `/app/data` | SQLite lives here |
 | `PORT` | `8080` | |

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { optionalEnv, requireEnv, type Env } from './env.ts';
+import { ZENMONEY_SERVERS, type ZenMoneyServer } from './zenmoney/client.ts';
 
 export interface Config {
   dataDir: string;
@@ -16,6 +17,7 @@ export interface Config {
   preferredAspsp: string;
   syncIntervalMs: number;
   telegram: { token: string; chatId: string } | null;
+  zenmoney: { token: string; server: ZenMoneyServer } | null;
 }
 
 export function loadConfig(env: Env, readFile: (path: string) => string = readUtf8): Config {
@@ -25,6 +27,12 @@ export function loadConfig(env: Env, readFile: (path: string) => string = readUt
   const hours = Number(requireEnv(env, 'SYNC_INTERVAL_HOURS', '8'));
   if (!Number.isFinite(hours) || hours < 1) {
     throw new Error(`SYNC_INTERVAL_HOURS must be a number >= 1, got ${env.SYNC_INTERVAL_HOURS}`);
+  }
+
+  const zmToken = optionalEnv(env, 'ZENMONEY_TOKEN');
+  const zmServer = requireEnv(env, 'ZENMONEY_SERVER', 'ru');
+  if (!(zmServer in ZENMONEY_SERVERS)) {
+    throw new Error(`ZENMONEY_SERVER must be one of ${Object.keys(ZENMONEY_SERVERS).join(', ')}, got ${zmServer}`);
   }
 
   const token = optionalEnv(env, 'TELEGRAM_BOT_TOKEN');
@@ -40,6 +48,7 @@ export function loadConfig(env: Env, readFile: (path: string) => string = readUt
     preferredAspsp: requireEnv(env, 'EB_ASPSP', 'imagin'),
     syncIntervalMs: hours * 3600_000,
     telegram: token && chatId ? { token, chatId } : null,
+    zenmoney: zmToken ? { token: zmToken, server: zmServer as ZenMoneyServer } : null,
   };
 }
 

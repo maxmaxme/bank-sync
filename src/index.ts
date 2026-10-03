@@ -8,6 +8,8 @@ import { startScheduler } from './scheduler.ts';
 import { openStore } from './storage/sqlite.ts';
 import { Syncer } from './sync.ts';
 import { createApp } from './web/server.ts';
+import { ZenMoneyClient } from './zenmoney/client.ts';
+import { ZenExporter } from './zenmoney/export.ts';
 import { createLogger } from './logger.ts';
 
 const log = createLogger('index');
@@ -24,7 +26,23 @@ async function main(): Promise<void> {
   const store = openStore(join(config.dataDir, 'bank-sync.sqlite'));
   const client = new EnableBankingClient({ appId: config.appId, privateKeyPem: config.privateKeyPem });
   const notifier = config.telegram ? new TelegramNotifier(config.telegram) : new NullNotifier();
-  const syncer = new Syncer({ api: client, store, notifier, log: createLogger('sync'), now });
+  const zen = config.zenmoney
+    ? new ZenExporter({
+        api: new ZenMoneyClient(config.zenmoney),
+        store,
+        notifier,
+        log: createLogger('zenmoney'),
+        now,
+      })
+    : null;
+  const syncer = new Syncer({
+    api: client,
+    store,
+    notifier,
+    log: createLogger('sync'),
+    now,
+    afterRun: zen ? () => zen.run() : undefined,
+  });
 
   // Self-check: catches a wrong key / app id / redirect URL before the first
   // bank login instead of halfway through it.
@@ -54,6 +72,7 @@ async function main(): Promise<void> {
     country: config.country,
     preferredAspsp: config.preferredAspsp,
     setupWarning: () => setupWarning,
+    zen,
     log: createLogger('web'),
     now,
   });

@@ -49,6 +49,7 @@ beforeEach(async () => {
     country: 'ES',
     preferredAspsp: 'imagin',
     setupWarning: () => null,
+    zen: null,
     log: silentLog,
     now: () => NOW,
   });
@@ -120,7 +121,7 @@ describe('web app', () => {
 describe('toCsv', () => {
   it('quotes cells with commas and quotes', () => {
     const [row] = normalizeTransactions([tx({ remittance_information: ['Pago "A", B'] })]);
-    const csv = toCsv([{ ...row!, accountKey: 'k', firstSeenAt: 0, updatedAt: 0 }]);
+    const csv = toCsv([{ ...row!, accountKey: 'k', firstSeenAt: 0, updatedAt: 0, zmId: null, zmPushedAt: null }]);
     expect(csv).toContain('"Pago ""A"", B"');
   });
 });

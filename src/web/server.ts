@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { formatCents } from '../money.ts';
 import { completeConnect, ConnectError, startConnect, type ConnectDeps } from '../connect.ts';
-import { renderPage } from './html.ts';
+import { renderPage, type ZenSection } from './html.ts';
+import { suggestZenAccount, type ZenExporter } from '../zenmoney/export.ts';
+import { isoDate } from '../sync.ts';
 import type { EnableBankingClient } from '../enablebanking/client.ts';
 import type { Aspsp } from '../enablebanking/types.ts';
 import type { Store, TransactionRow } from '../storage/types.ts';
@@ -18,6 +20,8 @@ export interface ServerDeps extends ConnectDeps {
   preferredAspsp: string;
   /** Shown on the page when the startup self-check found a problem. */
   setupWarning: () => string | null;
+  /** null when ZenMoney export isn't configured. */
+  zen: Pick<ZenExporter, 'reference' | 'run' | 'lastResult'> | null;
   log: Logger;
 }
 
@@ -117,6 +121,41 @@ export function createApp(deps: ServerDeps): Server {
     return aspspCache.list;
   }
 
+  async function zenSection(): Promise<ZenSection | null> {
+    if (!deps.zen) {
+      return null;
+    }
+    const accounts = deps.store.listAccounts().filter((a) => a.revokedAt === null);
+    const base = {
+      last: deps.zen.lastResult(),
+      rows: [] as ZenSection['rows'],
+      choices: [] as ZenSection['choices'],
+    };
+    try {
+      const ref = await deps.zen.reference();
+      base.choices = ref.accounts.map((a) => ({
+        id: a.id,
+        title: a.title,
+        currency: (a.instrument !== null && ref.currencies.get(a.instrument)) || '?',
+      }));
+      base.rows = accounts.map((a) => {
+        const own = deps.store.queryTransactions({ accountKey: a.accountKey });
+        const earliest = own.at(-1)?.txDate ?? isoDate(deps.now());
+        return {
+          accountKey: a.accountKey,
+          label: `${a.name ?? a.aspspName} · ${a.iban ? `…${a.iban.slice(-4)}` : ''}`,
+          current: a.zmAccountId,
+          suggested: suggestZenAccount(a, ref.accounts)?.id ?? null,
+          since: a.zmSince ?? earliest,
+          ...deps.store.exportStats(a.accountKey),
+        };
+      });
+      return { ...base, error: null };
+    } catch (err) {
+      return { ...base, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async function page(url: URL, res: ServerResponse): Promise<void> {
     let list: Aspsp[] | null = null;
     let aspspError: string | null = null;
@@ -139,6 +178,7 @@ export function createApp(deps: ServerDeps): Server {
       aspspError,
       preferredAspsp: deps.preferredAspsp,
       setupWarning: deps.setupWarning(),
+      zen: await zenSection(),
     });
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(html);
@@ -194,6 +234,29 @@ export function createApp(deps: ServerDeps): Server {
     if (method === 'POST' && path === '/sync') {
       deps.syncer.run('manual').catch((err: unknown) => deps.log.error({ err }, 'manual sync crashed'));
       flashRedirect(res, 'ok', 'Sync started — refresh the page in a minute.');
+      return;
+    }
+    if (method === 'POST' && path === '/zenmoney/map' && deps.zen) {
+      const form = await readForm(req);
+      const accountKey = form.get('account') ?? '';
+      const zmAccount = form.get('zm_account') || null;
+      const since = form.get('since') || null;
+      if (zmAccount && !(since && /^\d{4}-\d{2}-\d{2}$/.test(since))) {
+        throw new HttpError(400, 'Pick the date to export from.');
+      }
+      if (!deps.store.listAccounts().some((a) => a.accountKey === accountKey)) {
+        throw new HttpError(400, 'Unknown account.');
+      }
+      deps.store.setZenMapping(accountKey, zmAccount, zmAccount ? since : null);
+      if (zmAccount) {
+        deps.zen.run().catch((err: unknown) => deps.log.error({ err }, 'zenmoney export crashed'));
+      }
+      flashRedirect(res, 'ok', zmAccount ? 'Saved — exporting to ZenMoney now.' : 'ZenMoney export turned off for this account.');
+      return;
+    }
+    if (method === 'POST' && path === '/zenmoney/export' && deps.zen) {
+      deps.zen.run().catch((err: unknown) => deps.log.error({ err }, 'zenmoney export crashed'));
+      flashRedirect(res, 'ok', 'Export started — refresh in a few seconds.');
       return;
     }
     const del = /^\/sessions\/([^/]+)\/delete$/.exec(path);

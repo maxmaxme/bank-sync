@@ -1,6 +1,23 @@
 import { formatCents } from '../money.ts';
 import type { Aspsp } from '../enablebanking/types.ts';
 import type { AccountView, SessionRow, SyncRun, TransactionRow } from '../storage/types.ts';
+import type { ExportResult } from '../zenmoney/export.ts';
+
+export interface ZenSection {
+  /** Couldn't reach ZenMoney (bad token, wrong server, …). */
+  error: string | null;
+  choices: { id: string; title: string; currency: string }[];
+  rows: {
+    accountKey: string;
+    label: string;
+    current: string | null;
+    suggested: string | null;
+    since: string;
+    exported: number;
+    waiting: number;
+  }[];
+  last: ExportResult | null;
+}
 
 export interface PageModel {
   now: Date;
@@ -14,6 +31,8 @@ export interface PageModel {
   aspspError: string | null;
   preferredAspsp: string;
   setupWarning: string | null;
+  /** null when ZENMONEY_TOKEN isn't set. */
+  zen: ZenSection | null;
 }
 
 export function escapeHtml(s: string): string {
@@ -137,6 +156,49 @@ function connectSection(m: PageModel): string {
     </details>`;
 }
 
+function zenSection(m: PageModel): string {
+  const z = m.zen;
+  if (!z) {
+    return '<p class="muted small">Off — set <code>ZENMONEY_TOKEN</code> to export transactions to ZenMoney.</p>';
+  }
+  if (z.error) {
+    return `<p class="bad">Can't reach ZenMoney: ${e(z.error)}</p>`;
+  }
+  const rows = z.rows
+    .map((r) => {
+      const selected = r.current ?? r.suggested;
+      const options = [
+        `<option value="" ${selected ? '' : 'selected'}>— don't export —</option>`,
+        ...z.choices.map(
+          (c) =>
+            `<option value="${e(c.id)}" ${c.id === selected ? 'selected' : ''}>${e(c.title)} (${e(c.currency)})${c.id === r.suggested && !r.current ? ' — suggested' : ''}</option>`,
+        ),
+      ].join('');
+      const status = r.current
+        ? `<span class="muted small">exported ${r.exported}${r.waiting ? `, waiting ${r.waiting}` : ''}</span>`
+        : '<span class="muted small">not exporting</span>';
+      return `<form method="post" action="/zenmoney/map" class="card stack">
+        <div class="row"><b>${e(r.label)}</b>${status}</div>
+        <input type="hidden" name="account" value="${e(r.accountKey)}">
+        <label class="small muted">ZenMoney account</label>
+        <select name="zm_account">${options}</select>
+        <label class="small muted">Export transactions dated from</label>
+        <input type="date" name="since" value="${e(r.since)}">
+        <button>Save</button>
+      </form>`;
+    })
+    .join('');
+  const last = z.last
+    ? `<p class="small">Last export: ${fmtTime(z.last.at)} · ${
+        z.last.ok ? `ok, sent ${z.last.exported}` : `<span class="bad">failed</span>`
+      }${z.last.error ? `<span class="bad pre"> — ${e(z.last.error)}</span>` : ''}</p>`
+    : '';
+  return `<div class="cards">${rows}</div>
+    <p class="muted small">Booked transactions go to ZenMoney after every sync, with ZenMoney's own payee/category guess. Pending ones wait until the bank books them.</p>
+    ${last}
+    <form method="post" action="/zenmoney/export"><button>Export now</button></form>`;
+}
+
 function transactionsSection(m: PageModel): string {
   if (m.transactions.length === 0) {
     return '<p class="muted">No transactions yet.</p>';
@@ -209,6 +271,8 @@ ${sessionsSection(m)}
 ${accountsSection(m)}
 <h2>Sync</h2>
 ${syncSection(m)}
+<h2>ZenMoney</h2>
+${zenSection(m)}
 <h2>Connect a bank</h2>
 ${connectSection(m)}
 <h2>Recent transactions</h2>

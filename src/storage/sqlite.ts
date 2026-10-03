@@ -30,6 +30,8 @@ interface DbAccount {
   last_synced_at: number | null;
   last_error: string | null;
   initial_sync_done: number;
+  zm_account_id: string | null;
+  zm_since: string | null;
 }
 
 interface DbAccountView extends DbAccount {
@@ -53,6 +55,8 @@ interface DbTransaction {
   raw: string;
   first_seen_at: number;
   updated_at: number;
+  zm_id: string | null;
+  zm_pushed_at: number | null;
 }
 
 interface DbSyncRun {
@@ -89,6 +93,8 @@ function toAccount(r: DbAccount): AccountRow {
     lastSyncedAt: r.last_synced_at,
     lastError: r.last_error,
     initialSyncDone: r.initial_sync_done === 1,
+    zmAccountId: r.zm_account_id,
+    zmSince: r.zm_since,
   };
 }
 
@@ -108,6 +114,8 @@ function toTransaction(r: DbTransaction): TransactionRow {
     raw: r.raw,
     firstSeenAt: r.first_seen_at,
     updatedAt: r.updated_at,
+    zmId: r.zm_id,
+    zmPushedAt: r.zm_pushed_at,
   };
 }
 
@@ -273,6 +281,45 @@ export function openStore(path: string): Store {
           accountKey,
         );
       }
+    },
+
+    setZenMapping(accountKey, zmAccountId, since) {
+      db.prepare('UPDATE accounts SET zm_account_id = ?, zm_since = ? WHERE account_key = ?').run(
+        zmAccountId,
+        since,
+        accountKey,
+      );
+    },
+
+    unexportedTransactions(accountKey, since, limit) {
+      const rows = db
+        .prepare(
+          `SELECT * FROM transactions
+           WHERE account_key = ? AND status = 'BOOK' AND zm_pushed_at IS NULL AND tx_date >= ?
+           ORDER BY tx_date, first_seen_at
+           LIMIT ?`,
+        )
+        .all(accountKey, since, limit) as unknown as DbTransaction[];
+      return rows.map(toTransaction);
+    },
+
+    markExported(accountKey, txKey, zmId, now) {
+      db.prepare(
+        'UPDATE transactions SET zm_id = ?, zm_pushed_at = ? WHERE account_key = ? AND tx_key = ?',
+      ).run(zmId, now, accountKey, txKey);
+    },
+
+    exportStats(accountKey) {
+      const row = db
+        .prepare(
+          `SELECT
+             SUM(zm_pushed_at IS NOT NULL) AS exported,
+             SUM(zm_pushed_at IS NULL AND status = 'BOOK' AND tx_date >= COALESCE(a.zm_since, '9999')) AS waiting
+           FROM transactions t JOIN accounts a USING (account_key)
+           WHERE t.account_key = ?`,
+        )
+        .get(accountKey) as { exported: number | null; waiting: number | null };
+      return { exported: row.exported ?? 0, waiting: row.waiting ?? 0 };
     },
 
     latestTxDate(accountKey) {

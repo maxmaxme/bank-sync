@@ -28,6 +28,10 @@ export interface AccountRow extends AccountInput {
   lastSyncedAt: number | null;
   lastError: string | null;
   initialSyncDone: boolean;
+  /** ZenMoney account this one exports to, or null when export is off. */
+  zmAccountId: string | null;
+  /** Only rows dated on/after this go to ZenMoney (what's older is already there). */
+  zmSince: string | null;
 }
 
 export interface AccountView extends AccountRow {
@@ -57,6 +61,8 @@ export interface TransactionRow extends NewTransaction {
   accountKey: string;
   firstSeenAt: number;
   updatedAt: number;
+  zmId: string | null;
+  zmPushedAt: number | null;
 }
 
 export interface TransactionQuery {
@@ -95,6 +101,12 @@ export interface Store {
       | { ok: false; error: string },
     now: number,
   ): void;
+
+  setZenMapping(accountKey: string, zmAccountId: string | null, since: string | null): void;
+  /** Booked rows from `since` on that haven't been written to ZenMoney yet, oldest first. */
+  unexportedTransactions(accountKey: string, since: string, limit: number): TransactionRow[];
+  markExported(accountKey: string, txKey: string, zmId: string, now: number): void;
+  exportStats(accountKey: string): { exported: number; waiting: number };
 
   latestTxDate(accountKey: string): string | null;
   /**

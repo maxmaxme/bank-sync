@@ -26,6 +26,8 @@ export interface SyncDeps {
   notifier: Notifier;
   log: Logger;
   now: () => Date;
+  /** Runs after every sync, e.g. pushing new rows on to ZenMoney. Its failures don't fail the sync. */
+  afterRun?: () => Promise<unknown>;
 }
 
 export interface AccountSyncResult {
@@ -204,6 +206,14 @@ export class Syncer {
       }
     } catch (err) {
       log.error({ err }, 'notification failed');
+    }
+
+    if (this.deps.afterRun) {
+      try {
+        await this.deps.afterRun();
+      } catch (err) {
+        log.error({ err }, 'post-sync hook failed');
+      }
     }
 
     return summary;

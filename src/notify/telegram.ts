@@ -39,6 +39,19 @@ export class TelegramNotifier implements Notifier {
     );
   }
 
+  exportFailed(error: string, tokenExpired: boolean): Promise<void> {
+    return this.send(
+      tokenExpired
+        ? '✗ bank-sync: the ZenMoney token was rejected. Take a fresh one from zerro.app ' +
+            '(localStorage → zm_token) and update ZENMONEY_TOKEN.'
+        : `✗ bank-sync: ZenMoney export failed.\n${error}`,
+    );
+  }
+
+  exportRecovered(): Promise<void> {
+    return this.send('✓ bank-sync: ZenMoney export is working again.');
+  }
+
   private async send(text: string): Promise<void> {
     const url = `https://api.telegram.org/bot${this.token}/sendMessage`;
     const res = await this.fetchImpl(url, {
@@ -59,4 +72,6 @@ export class NullNotifier implements Notifier {
   async syncRecovered(): Promise<void> {}
   async consentExpiring(): Promise<void> {}
   async consentExpired(): Promise<void> {}
+  async exportFailed(): Promise<void> {}
+  async exportRecovered(): Promise<void> {}
 }
