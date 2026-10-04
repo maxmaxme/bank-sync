@@ -16,6 +16,9 @@ ENV NODE_ENV=production \
     BANK_SYNC_DATA_DIR=/app/data \
     PORT=8080
 
+# uid 1000, so the database in a bind-mounted data dir belongs to the host user.
+RUN mkdir -p /app/data && chown node:node /app/data
+USER node
 VOLUME ["/app/data"]
 EXPOSE 8080
 

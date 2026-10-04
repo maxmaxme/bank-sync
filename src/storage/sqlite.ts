@@ -134,10 +134,13 @@ function toTransaction(r: DbTransaction): TransactionRow {
 
 function migrate(db: DatabaseSync): void {
   const row = v.parse(v.object({ user_version: int }), db.prepare('PRAGMA user_version').get());
-  for (let version = row.user_version; version < MIGRATIONS.length; version++) {
+  for (const [version, sql] of MIGRATIONS.entries()) {
+    if (version < row.user_version) {
+      continue;
+    }
     db.exec('BEGIN');
     try {
-      db.exec(MIGRATIONS[version]);
+      db.exec(sql);
       db.exec(`PRAGMA user_version = ${version + 1}`);
       db.exec('COMMIT');
     } catch (err) {

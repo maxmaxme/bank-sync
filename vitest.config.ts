@@ -9,7 +9,9 @@ export default defineConfig({
       reporter: ['text', 'html', 'cobertura', 'lcov'],
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/types.ts', 'src/**/*.d.ts'],
+      exclude: ['src/**/types.ts', 'src/**/*.d.ts', 'src/index.ts', 'src/logger.ts'],
+      // A floor just under today's numbers: CI fails if coverage slips. Raise it as tests grow.
+      thresholds: { statements: 75, branches: 57, functions: 70, lines: 75 },
     },
   },
 });

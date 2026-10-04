@@ -254,7 +254,7 @@ describe('migration', () => {
   it('upgrades a v1 database in place, keeping its rows', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'bank-sync-')), 'db.sqlite');
     const old = new DatabaseSync(path);
-    old.exec(MIGRATIONS[0]);
+    old.exec(MIGRATIONS[0]!);
     old.exec('PRAGMA user_version = 1');
     old.exec(`INSERT INTO kv (key, value) VALUES ('k', 'v')`);
     old.close();
