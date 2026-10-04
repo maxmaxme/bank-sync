@@ -11,6 +11,19 @@ permissions:
   packages: write
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run knip
+
   typecheck:
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +55,7 @@ jobs:
           retention-days: 14
 
   build:
-    needs: [typecheck, test]
+    needs: [lint, typecheck, test]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:

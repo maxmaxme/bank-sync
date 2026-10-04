@@ -18,11 +18,12 @@ const log = createLogger('index');
 // is injected by docker-compose's `env_file`, so this is a no-op.
 loadEnvFiles(defaultEnvCandidates(import.meta.url));
 
+const now = () => new Date();
+
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
   mkdirSync(config.dataDir, { recursive: true });
 
-  const now = () => new Date();
   const store = openStore(join(config.dataDir, 'bank-sync.sqlite'));
   const client = new EnableBankingClient({ appId: config.appId, privateKeyPem: config.privateKeyPem });
   const notifier = config.telegram ? new TelegramNotifier(config.telegram) : new NullNotifier();
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
     if (!app.redirect_urls.includes(config.redirectUrl)) {
       setupWarning =
         `EB_REDIRECT_URL (${config.redirectUrl}) is not among the Enable Banking app's redirect URLs: ` +
-        `${app.redirect_urls.join(', ') || '—'}`;
+        (app.redirect_urls.join(', ') || '—');
     } else if (!app.active) {
       setupWarning = 'The Enable Banking app is not active — link your own accounts in the Control Panel.';
     }

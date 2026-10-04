@@ -14,7 +14,6 @@ const InstrumentSchema = v.object({
   id: v.number(),
   shortTitle: v.string(),
 });
-export type ZmInstrument = v.InferOutput<typeof InstrumentSchema>;
 
 const AccountSchema = v.object({
   id: v.string(),

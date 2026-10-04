@@ -135,7 +135,9 @@ describe('pickBalance', () => {
   });
 
   it('falls back to the first balance of an unknown type', () => {
-    expect(pickBalance([{ balance_amount: { currency: 'EUR', amount: '3' }, balance_type: 'OTHR' }])?.balance_amount.amount).toBe('3');
+    expect(
+      pickBalance([{ balance_amount: { currency: 'EUR', amount: '3' }, balance_type: 'OTHR' }])?.balance_amount.amount,
+    ).toBe('3');
     expect(pickBalance([])).toBeNull();
   });
 });

@@ -10,7 +10,7 @@ import { normalizeTransactions } from '../src/transactions.ts';
 import { ZenMoneyClient, ZenMoneyError } from '../src/zenmoney/client.ts';
 import { LAST_EXPORT_KV, suggestZenAccount, ZenExporter, zmIdFor } from '../src/zenmoney/export.ts';
 import type { ZenMoneyApi, ZmAccount, ZmDiff, ZmDiffResponse, ZmSuggestion } from '../src/zenmoney/types.ts';
-import { RecordingNotifier, silentLog, tx } from './helpers.ts';
+import { RecordingNotifier, requestBody, silentLog, tx } from './helpers.ts';
 
 const NOW = new Date('2026-10-03T12:00:00Z');
 const NOW_SEC = NOW.getTime() / 1000;
@@ -68,7 +68,14 @@ beforeEach(() => {
   notifier = new RecordingNotifier();
   exporter = new ZenExporter({ api: zen, store, notifier, log: silentLog, now: () => NOW });
   store.saveSession(
-    { sessionId: 's1', aspspName: 'imagin', aspspCountry: 'ES', validUntil: '2027-04-01T00:00:00Z', createdAt: 0, revokedAt: null },
+    {
+      sessionId: 's1',
+      aspspName: 'imagin',
+      aspspCountry: 'ES',
+      validUntil: '2027-04-01T00:00:00Z',
+      createdAt: 0,
+      revokedAt: null,
+    },
     [{ accountKey: 'acc-A', uid: 'u1', iban: 'ES0000000000000000004321', name: 'Cuenta', currency: 'EUR' }],
   );
 });
@@ -199,10 +206,10 @@ describe('ZenMoneyClient', () => {
       token: 'tok',
       server: 'ru',
       now: () => NOW.getTime(),
-      fetch: (async (url: URL, init: RequestInit) => {
-        calls.push({ url: String(url), init });
+      fetch: async (input, init = {}) => {
+        calls.push({ url: input instanceof Request ? input.url : String(input), init });
         return response();
-      }) as typeof fetch,
+      },
     });
     return { client, calls };
   }
@@ -213,10 +220,10 @@ describe('ZenMoneyClient', () => {
     );
     const err = await client.diff({ serverTimestamp: 1 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ZenMoneyError);
-    expect((err as Error).message).toContain('validationError: Wrong Value');
+    expect(err).toHaveProperty('message', expect.stringContaining('validationError: Wrong Value'));
     expect(calls[0]?.url).toBe('https://api.zenmoney.ru/v8/diff/');
-    expect((calls[0]?.init.headers as Record<string, string>).authorization).toBe('Bearer tok');
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ serverTimestamp: 1, currentClientTimestamp: NOW_SEC });
+    expect(new Headers(calls[0]?.init.headers).get('authorization')).toBe('Bearer tok');
+    expect(JSON.parse(requestBody(calls[0]?.init))).toEqual({ serverTimestamp: 1, currentClientTimestamp: NOW_SEC });
   });
 
   it('an error of an unexpected shape with HTTP 200 still fails the write', async () => {
@@ -247,7 +254,7 @@ describe('migration', () => {
   it('upgrades a v1 database in place, keeping its rows', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'bank-sync-')), 'db.sqlite');
     const old = new DatabaseSync(path);
-    old.exec(MIGRATIONS[0] as string);
+    old.exec(MIGRATIONS[0]);
     old.exec('PRAGMA user_version = 1');
     old.exec(`INSERT INTO kv (key, value) VALUES ('k', 'v')`);
     old.close();

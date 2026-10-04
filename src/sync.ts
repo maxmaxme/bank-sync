@@ -7,11 +7,11 @@ import type { Notifier } from './notify/types.ts';
 import type { Logger } from './logger.ts';
 
 /** First sync after a consent asks for this much; banks clamp it to what they keep. */
-export const INITIAL_HISTORY_DAYS = 730;
+const INITIAL_HISTORY_DAYS = 730;
 /** Fallback when a bank rejects the long window outright. */
-export const FALLBACK_HISTORY_DAYS = 90;
+const FALLBACK_HISTORY_DAYS = 90;
 /** Re-read this many days before the newest booked row: late bookings, pending → booked. */
-export const OVERLAP_DAYS = 10;
+const OVERLAP_DAYS = 10;
 const MAX_PAGES = 200;
 
 /** Preference order when a bank reports several balance types. */
@@ -30,7 +30,7 @@ export interface SyncDeps {
   afterRun?: () => Promise<unknown>;
 }
 
-export interface AccountSyncResult {
+interface AccountSyncResult {
   accountKey: string;
   added: number;
   error: string | null;
@@ -82,7 +82,7 @@ async function fetchAllTransactions(
 }
 
 /** Fetch, store and return how many rows were new for one account. */
-export async function syncAccount(deps: SyncDeps, account: AccountRow): Promise<number> {
+async function syncAccount(deps: SyncDeps, account: AccountRow): Promise<number> {
   const now = deps.now();
   const today = isoDate(now);
   const latest = deps.store.latestTxDate(account.accountKey);
@@ -103,12 +103,7 @@ export async function syncAccount(deps: SyncDeps, account: AccountRow): Promise<
     txs = await fetchAllTransactions(deps.api, account.uid, dateFrom, 'default');
   }
 
-  const added = deps.store.applyTransactions(
-    account.accountKey,
-    dateFrom,
-    normalizeTransactions(txs),
-    now.getTime(),
-  );
+  const added = deps.store.applyTransactions(account.accountKey, dateFrom, normalizeTransactions(txs), now.getTime());
 
   // Balance is nice-to-have: a failure here shouldn't throw away the transactions.
   let balanceCents: number | null = null;
@@ -123,15 +118,8 @@ export async function syncAccount(deps: SyncDeps, account: AccountRow): Promise<
     deps.log.warn({ err, accountKey: account.accountKey }, 'balance fetch failed');
   }
 
-  deps.store.recordAccountSync(
-    account.accountKey,
-    { ok: true, balanceCents, balanceCurrency },
-    now.getTime(),
-  );
-  deps.log.info(
-    { accountKey: account.accountKey, dateFrom, fetched: txs.length, added, initial },
-    'account synced',
-  );
+  deps.store.recordAccountSync(account.accountKey, { ok: true, balanceCents, balanceCurrency }, now.getTime());
+  deps.log.info({ accountKey: account.accountKey, dateFrom, fetched: txs.length, added, initial }, 'account synced');
   return added;
 }
 

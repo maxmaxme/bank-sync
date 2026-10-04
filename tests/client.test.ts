@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { EnableBankingClient, EnableBankingError } from '../src/enablebanking/client.ts';
 import { signAppJwt } from '../src/enablebanking/jwt.ts';
 import { normalizeTransactions } from '../src/transactions.ts';
+import { requestBody } from './helpers.ts';
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -15,7 +16,8 @@ function decode(part: string): Record<string, unknown> {
 describe('signAppJwt', () => {
   it('produces a verifiable RS256 token with the claims Enable Banking expects', () => {
     const jwt = signAppJwt('app-123', pem, NOW);
-    const [h, p, s] = jwt.split('.') as [string, string, string];
+    expect(jwt.split('.')).toHaveLength(3);
+    const [h = '', p = '', s = ''] = jwt.split('.');
     expect(decode(h)).toEqual({ typ: 'JWT', alg: 'RS256', kid: 'app-123' });
     expect(decode(p)).toEqual({
       iss: 'enablebanking.com',
@@ -34,10 +36,11 @@ describe('EnableBankingClient', () => {
       appId: 'app-123',
       privateKeyPem: pem,
       now: () => NOW,
-      fetch: (async (input: URL, init: RequestInit) => {
-        calls.push({ url: input, init });
-        return handler(input, init);
-      }) as typeof fetch,
+      fetch: async (input, init = {}) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        calls.push({ url, init });
+        return handler(url, init);
+      },
     });
     return { client, calls };
   }
@@ -51,7 +54,7 @@ describe('EnableBankingClient', () => {
       date_from: '2026-01-01',
       strategy: 'longest',
     });
-    expect((calls[0]?.init.headers as Record<string, string>).authorization).toMatch(/^Bearer ey/);
+    expect(new Headers(calls[0]?.init.headers).get('authorization')).toMatch(/^Bearer ey/);
   });
 
   it('posts the auth request in the documented shape', async () => {
@@ -62,7 +65,7 @@ describe('EnableBankingClient', () => {
       state: 's',
       redirectUrl: 'https://example.com/cb',
     });
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+    expect(JSON.parse(requestBody(calls[0]?.init))).toEqual({
       access: { valid_until: new Date(NOW + 1000).toISOString() },
       aspsp: { name: 'imagin', country: 'ES' },
       state: 's',
@@ -81,7 +84,7 @@ describe('EnableBankingClient', () => {
     const err = await client.getBalances('acc-1').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EnableBankingError);
     expect(err).toMatchObject({ status: 429, code: 'ASPSP_RATE_LIMIT_EXCEEDED' });
-    expect((err as Error).message).toContain('ASPSP Rate limit exceeded');
+    expect(err).toHaveProperty('message', expect.stringContaining('ASPSP Rate limit exceeded'));
   });
 
   it('keeps transaction fields it does not model, nested ones too — they are stored raw', async () => {
@@ -104,13 +107,16 @@ describe('EnableBankingClient', () => {
     const err = await client.getTransactions('acc-1', { dateFrom: '2026-01-01' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EnableBankingError);
     expect(err).toMatchObject({ status: 200, code: null });
-    expect((err as Error).message).toMatch(/\/accounts\/acc-1\/transactions .*unexpected response.*amount/s);
+    expect(err).toHaveProperty(
+      'message',
+      expect.stringMatching(/\/accounts\/acc-1\/transactions .*unexpected response.*amount/s),
+    );
   });
 
   it('keeps the raw body of an error that is not an ErrorResponse', async () => {
     const { client } = clientWith(() => new Response('<html>Bad Gateway</html>', { status: 502 }));
     const err = await client.getBalances('acc-1').catch((e: unknown) => e);
     expect(err).toMatchObject({ status: 502, code: null });
-    expect((err as Error).message).toContain('<html>Bad Gateway</html>');
+    expect(err).toHaveProperty('message', expect.stringContaining('<html>Bad Gateway</html>'));
   });
 });

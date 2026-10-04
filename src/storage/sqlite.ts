@@ -1,72 +1,85 @@
 import { DatabaseSync } from 'node:sqlite';
+import * as v from 'valibot';
 import { MIGRATIONS } from './migrations.ts';
-import type {
-  AccountRow,
-  AccountView,
-  SessionRow,
-  Store,
-  SyncRun,
-  TransactionRow,
-} from './types.ts';
+import type { AccountRow, AccountView, SessionRow, Store, SyncRun, TransactionRow } from './types.ts';
 
-interface DbSession {
-  session_id: string;
-  aspsp_name: string;
-  aspsp_country: string;
-  valid_until: string;
-  created_at: number;
-  revoked_at: number | null;
+// Rows as SQLite hands them back. Parsed, not cast: a migration that drifts
+// from these shapes fails loudly at the query instead of leaking undefined.
+const text = v.string();
+const textOrNull = v.nullable(v.string());
+const int = v.number();
+const intOrNull = v.nullable(v.number());
+
+const DbSessionSchema = v.object({
+  session_id: text,
+  aspsp_name: text,
+  aspsp_country: text,
+  valid_until: text,
+  created_at: int,
+  revoked_at: intOrNull,
+});
+type DbSession = v.InferOutput<typeof DbSessionSchema>;
+
+const DbAccountSchema = v.object({
+  account_key: text,
+  uid: text,
+  session_id: text,
+  iban: textOrNull,
+  name: textOrNull,
+  currency: textOrNull,
+  balance_cents: intOrNull,
+  balance_currency: textOrNull,
+  last_synced_at: intOrNull,
+  last_error: textOrNull,
+  initial_sync_done: int,
+  zm_account_id: textOrNull,
+  zm_since: textOrNull,
+});
+type DbAccount = v.InferOutput<typeof DbAccountSchema>;
+
+const DbAccountViewSchema = v.object({
+  ...DbAccountSchema.entries,
+  aspsp_name: text,
+  valid_until: text,
+  revoked_at: intOrNull,
+});
+
+const DbTransactionSchema = v.object({
+  account_key: text,
+  tx_key: text,
+  status: text,
+  booking_date: textOrNull,
+  value_date: textOrNull,
+  transaction_date: textOrNull,
+  tx_date: textOrNull,
+  amount_cents: int,
+  currency: text,
+  counterparty: textOrNull,
+  description: textOrNull,
+  raw: text,
+  first_seen_at: int,
+  updated_at: int,
+  zm_id: textOrNull,
+  zm_pushed_at: intOrNull,
+});
+type DbTransaction = v.InferOutput<typeof DbTransactionSchema>;
+
+const DbSyncRunSchema = v.object({
+  id: int,
+  trigger: text,
+  started_at: int,
+  finished_at: intOrNull,
+  ok: intOrNull,
+  added: intOrNull,
+  error: textOrNull,
+});
+
+function all<S extends v.GenericSchema>(schema: S, rows: unknown[]): v.InferOutput<S>[] {
+  return v.parse(v.array(schema), rows);
 }
 
-interface DbAccount {
-  account_key: string;
-  uid: string;
-  session_id: string;
-  iban: string | null;
-  name: string | null;
-  currency: string | null;
-  balance_cents: number | null;
-  balance_currency: string | null;
-  last_synced_at: number | null;
-  last_error: string | null;
-  initial_sync_done: number;
-  zm_account_id: string | null;
-  zm_since: string | null;
-}
-
-interface DbAccountView extends DbAccount {
-  aspsp_name: string;
-  valid_until: string;
-  revoked_at: number | null;
-}
-
-interface DbTransaction {
-  account_key: string;
-  tx_key: string;
-  status: string;
-  booking_date: string | null;
-  value_date: string | null;
-  transaction_date: string | null;
-  tx_date: string | null;
-  amount_cents: number;
-  currency: string;
-  counterparty: string | null;
-  description: string | null;
-  raw: string;
-  first_seen_at: number;
-  updated_at: number;
-  zm_id: string | null;
-  zm_pushed_at: number | null;
-}
-
-interface DbSyncRun {
-  id: number;
-  trigger: string;
-  started_at: number;
-  finished_at: number | null;
-  ok: number | null;
-  added: number | null;
-  error: string | null;
+function one<S extends v.GenericSchema>(schema: S, row: unknown): v.InferOutput<S> | undefined {
+  return row === undefined ? undefined : v.parse(schema, row);
 }
 
 function toSession(r: DbSession): SessionRow {
@@ -120,12 +133,12 @@ function toTransaction(r: DbTransaction): TransactionRow {
 }
 
 function migrate(db: DatabaseSync): void {
-  const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-  for (let v = row.user_version; v < MIGRATIONS.length; v++) {
+  const row = v.parse(v.object({ user_version: int }), db.prepare('PRAGMA user_version').get());
+  for (let version = row.user_version; version < MIGRATIONS.length; version++) {
     db.exec('BEGIN');
     try {
-      db.exec(MIGRATIONS[v] as string);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
+      db.exec(MIGRATIONS[version]);
+      db.exec(`PRAGMA user_version = ${version + 1}`);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
@@ -192,13 +205,7 @@ export function openStore(path: string): Store {
           `INSERT INTO sessions (session_id, aspsp_name, aspsp_country, valid_until, created_at, revoked_at)
            VALUES (?, ?, ?, ?, ?, NULL)
            ON CONFLICT (session_id) DO UPDATE SET valid_until = excluded.valid_until`,
-        ).run(
-          session.sessionId,
-          session.aspspName,
-          session.aspspCountry,
-          session.validUntil,
-          session.createdAt,
-        );
+        ).run(session.sessionId, session.aspspName, session.aspspCountry, session.validUntil, session.createdAt);
         const upsertAccount = db.prepare(
           `INSERT INTO accounts (account_key, uid, session_id, iban, name, currency)
            VALUES (@account_key, @uid, @session_id, @iban, @name, @currency)
@@ -231,39 +238,41 @@ export function openStore(path: string): Store {
     },
 
     listSessions() {
-      const rows = db
-        .prepare('SELECT * FROM sessions ORDER BY created_at DESC')
-        .all() as unknown as DbSession[];
+      const rows = all(DbSessionSchema, db.prepare('SELECT * FROM sessions ORDER BY created_at DESC').all());
       return rows.map(toSession);
     },
 
     activeAccounts(now) {
-      const rows = db
-        .prepare(
-          `SELECT a.* FROM accounts a JOIN sessions s USING (session_id)
+      const rows = all(
+        DbAccountSchema,
+        db
+          .prepare(
+            `SELECT a.* FROM accounts a JOIN sessions s USING (session_id)
            WHERE s.revoked_at IS NULL AND s.valid_until > ?
            ORDER BY a.account_key`,
-        )
-        .all(new Date(now).toISOString()) as unknown as DbAccount[];
+          )
+          .all(new Date(now).toISOString()),
+      );
       return rows.map(toAccount);
     },
 
     listAccounts() {
-      const rows = db
-        .prepare(
-          `SELECT a.*, s.aspsp_name, s.valid_until, s.revoked_at
+      const rows = all(
+        DbAccountViewSchema,
+        db
+          .prepare(
+            `SELECT a.*, s.aspsp_name, s.valid_until, s.revoked_at
            FROM accounts a JOIN sessions s USING (session_id)
            ORDER BY a.account_key`,
-        )
-        .all() as unknown as DbAccountView[];
-      return rows.map(
-        (r): AccountView => ({
-          ...toAccount(r),
-          aspspName: r.aspsp_name,
-          validUntil: r.valid_until,
-          revokedAt: r.revoked_at,
-        }),
+          )
+          .all(),
       );
+      return rows.map((r): AccountView => ({
+        ...toAccount(r),
+        aspspName: r.aspsp_name,
+        validUntil: r.valid_until,
+        revokedAt: r.revoked_at,
+      }));
     },
 
     recordAccountSync(accountKey, result, now) {
@@ -276,10 +285,7 @@ export function openStore(path: string): Store {
            WHERE account_key = ?`,
         ).run(result.balanceCents, result.balanceCurrency, now, accountKey);
       } else {
-        db.prepare('UPDATE accounts SET last_error = ? WHERE account_key = ?').run(
-          result.error,
-          accountKey,
-        );
+        db.prepare('UPDATE accounts SET last_error = ? WHERE account_key = ?').run(result.error, accountKey);
       }
     },
 
@@ -292,55 +298,66 @@ export function openStore(path: string): Store {
     },
 
     unexportedTransactions(accountKey, since, limit) {
-      const rows = db
-        .prepare(
-          `SELECT * FROM transactions
+      const rows = all(
+        DbTransactionSchema,
+        db
+          .prepare(
+            `SELECT * FROM transactions
            WHERE account_key = ? AND status = 'BOOK' AND zm_pushed_at IS NULL AND tx_date >= ?
            ORDER BY tx_date, first_seen_at
            LIMIT ?`,
-        )
-        .all(accountKey, since, limit) as unknown as DbTransaction[];
+          )
+          .all(accountKey, since, limit),
+      );
       return rows.map(toTransaction);
     },
 
     markExported(accountKey, txKey, zmId, now) {
-      db.prepare(
-        'UPDATE transactions SET zm_id = ?, zm_pushed_at = ? WHERE account_key = ? AND tx_key = ?',
-      ).run(zmId, now, accountKey, txKey);
+      db.prepare('UPDATE transactions SET zm_id = ?, zm_pushed_at = ? WHERE account_key = ? AND tx_key = ?').run(
+        zmId,
+        now,
+        accountKey,
+        txKey,
+      );
     },
 
     exportStats(accountKey) {
-      const row = db
-        .prepare(
-          `SELECT
-             SUM(zm_pushed_at IS NOT NULL) AS exported,
-             SUM(zm_pushed_at IS NULL AND status = 'BOOK' AND tx_date >= COALESCE(a.zm_since, '9999')) AS waiting
-           FROM transactions t JOIN accounts a USING (account_key)
-           WHERE t.account_key = ?`,
-        )
-        .get(accountKey) as { exported: number | null; waiting: number | null };
-      return { exported: row.exported ?? 0, waiting: row.waiting ?? 0 };
+      const row = one(
+        v.object({ exported: intOrNull, waiting: intOrNull }),
+        db
+          .prepare(
+            `SELECT
+               SUM(zm_pushed_at IS NOT NULL) AS exported,
+               SUM(zm_pushed_at IS NULL AND status = 'BOOK' AND tx_date >= COALESCE(a.zm_since, '9999')) AS waiting
+             FROM transactions t JOIN accounts a USING (account_key)
+             WHERE t.account_key = ?`,
+          )
+          .get(accountKey),
+      );
+      return { exported: row?.exported ?? 0, waiting: row?.waiting ?? 0 };
     },
 
     latestTxDate(accountKey) {
-      const row = db
-        .prepare(
-          `SELECT MAX(tx_date) AS d FROM transactions WHERE account_key = ? AND status = 'BOOK'`,
-        )
-        .get(accountKey) as { d: string | null } | undefined;
+      const row = one(
+        v.object({ d: textOrNull }),
+        db
+          .prepare(`SELECT MAX(tx_date) AS d FROM transactions WHERE account_key = ? AND status = 'BOOK'`)
+          .get(accountKey),
+      );
       return row?.d ?? null;
     },
 
     applyTransactions(accountKey, dateFrom, txs, now) {
       return inTransaction(() => {
         const existing = new Set(
-          (
+          all(
+            v.object({ tx_key: text }),
             db
               .prepare(
                 `SELECT tx_key FROM transactions
-                 WHERE account_key = ? AND (tx_date IS NULL OR tx_date >= ?)`,
+                   WHERE account_key = ? AND (tx_date IS NULL OR tx_date >= ?)`,
               )
-              .all(accountKey, dateFrom) as unknown as { tx_key: string }[]
+              .all(accountKey, dateFrom),
           ).map((r) => r.tx_key),
         );
         db.prepare(
@@ -393,14 +410,12 @@ export function openStore(path: string): Store {
         (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
         ` ORDER BY tx_date DESC, first_seen_at DESC` +
         (q.limit ? ` LIMIT ${Math.max(1, Math.floor(q.limit))}` : '');
-      const rows = db.prepare(sql).all(...params) as unknown as DbTransaction[];
+      const rows = all(DbTransactionSchema, db.prepare(sql).all(...params));
       return rows.map(toTransaction);
     },
 
     startSyncRun(trigger, now) {
-      const res = db
-        .prepare('INSERT INTO sync_runs (trigger, started_at) VALUES (?, ?)')
-        .run(trigger, now);
+      const res = db.prepare('INSERT INTO sync_runs (trigger, started_at) VALUES (?, ?)').run(trigger, now);
       return Number(res.lastInsertRowid);
     },
 
@@ -415,26 +430,20 @@ export function openStore(path: string): Store {
     },
 
     recentSyncRuns(limit) {
-      const rows = db
-        .prepare('SELECT * FROM sync_runs ORDER BY id DESC LIMIT ?')
-        .all(limit) as unknown as DbSyncRun[];
-      return rows.map(
-        (r): SyncRun => ({
-          id: r.id,
-          trigger: r.trigger,
-          startedAt: r.started_at,
-          finishedAt: r.finished_at,
-          ok: r.ok === null ? null : r.ok === 1,
-          added: r.added,
-          error: r.error,
-        }),
-      );
+      const rows = all(DbSyncRunSchema, db.prepare('SELECT * FROM sync_runs ORDER BY id DESC LIMIT ?').all(limit));
+      return rows.map((r): SyncRun => ({
+        id: r.id,
+        trigger: r.trigger,
+        startedAt: r.started_at,
+        finishedAt: r.finished_at,
+        ok: r.ok === null ? null : r.ok === 1,
+        added: r.added,
+        error: r.error,
+      }));
     },
 
     getKv(key) {
-      const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as
-        | { value: string }
-        | undefined;
+      const row = one(v.object({ value: text }), db.prepare('SELECT value FROM kv WHERE key = ?').get(key));
       return row?.value ?? null;
     },
 

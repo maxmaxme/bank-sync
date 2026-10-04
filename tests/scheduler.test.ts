@@ -32,8 +32,7 @@ describe('checkConsentExpiry', () => {
       [],
     );
   }
-  const run = (iso: string) =>
-    checkConsentExpiry({ store, notifier, log: silentLog, now: () => new Date(iso) });
+  const run = (iso: string) => checkConsentExpiry({ store, notifier, log: silentLog, now: () => new Date(iso) });
 
   it('stays quiet while the consent has more than a week left', async () => {
     session('2026-12-01T00:00:00Z');

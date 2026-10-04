@@ -35,7 +35,7 @@ export interface PageModel {
   zen: ZenSection | null;
 }
 
-export function escapeHtml(s: string): string {
+function escapeHtml(s: string): string {
   return s
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')

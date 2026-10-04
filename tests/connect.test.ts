@@ -30,7 +30,7 @@ const SESSION: SessionResponse = {
 };
 
 let store: Store;
-let startAuthArgs: unknown[];
+let startAuthArgs: Parameters<ConnectDeps['client']['startAuth']>[0][];
 let syncs: string[];
 let deps: ConnectDeps;
 
@@ -79,12 +79,12 @@ describe('connect flow', () => {
       { name: 'imagin', country: 'ES', maximum_consent_validity: 180 * 86400, beta: false },
       'http://pi.home:8085',
     );
-    return (startAuthArgs[0] as { state: string }).state;
+    return startAuthArgs[0]?.state ?? '';
   }
 
   it('requests the bank maximum consent minus a margin', async () => {
     await start();
-    const { validUntil } = startAuthArgs[0] as { validUntil: Date };
+    const validUntil = startAuthArgs[0]?.validUntil ?? new Date(0);
     const days = (validUntil.getTime() - NOW.getTime()) / 86_400_000;
     expect(days).toBeGreaterThan(179.9);
     expect(days).toBeLessThan(180);
@@ -112,17 +112,14 @@ describe('connect flow', () => {
     const state = await start();
     await completeConnect(deps, new URLSearchParams({ code: 'c', state }));
     await expect(completeConnect(deps, new URLSearchParams({ code: 'c', state }))).rejects.toThrow(ConnectError);
-    await expect(
-      completeConnect(deps, new URLSearchParams({ code: 'c', state: 'forged.eA' })),
-    ).rejects.toThrow(/expired or was already used/);
+    await expect(completeConnect(deps, new URLSearchParams({ code: 'c', state: 'forged.eA' }))).rejects.toThrow(
+      /expired or was already used/,
+    );
   });
 
   it('surfaces the bank error from the redirect', async () => {
     await expect(
-      completeConnect(
-        deps,
-        new URLSearchParams({ error: 'access_denied', error_description: 'Cancelled by user' }),
-      ),
+      completeConnect(deps, new URLSearchParams({ error: 'access_denied', error_description: 'Cancelled by user' })),
     ).rejects.toThrow('access_denied — Cancelled by user');
   });
 });

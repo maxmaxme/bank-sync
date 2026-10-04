@@ -122,31 +122,31 @@ into `ZENMONEY_TOKEN` and restart.
 
 ## Configuration
 
-| Var | Default | |
-| --- | --- | --- |
-| `EB_APP_ID` | — | required |
-| `EB_REDIRECT_URL` | — | required, must match a registered URL exactly |
-| `EB_PRIVATE_KEY_PATH` | `$BANK_SYNC_DATA_DIR/enablebanking.pem` | |
-| `EB_COUNTRY` | `ES` | banks listed in the picker |
-| `EB_ASPSP` | `imagin` | preselected bank (substring match) |
-| `SYNC_INTERVAL_HOURS` | `8` | |
-| `ZENMONEY_TOKEN` | — | enables the ZenMoney export |
-| `ZENMONEY_SERVER` | `ru` | `ru` or `app` — where the token was issued |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | optional notifications |
-| `BANK_SYNC_DATA_DIR` | `/app/data` | SQLite lives here |
-| `PORT` | `8080` | |
-| `LOG_LEVEL` | `info` | |
+| Var                                      | Default                                 |                                               |
+| ---------------------------------------- | --------------------------------------- | --------------------------------------------- |
+| `EB_APP_ID`                              | —                                       | required                                      |
+| `EB_REDIRECT_URL`                        | —                                       | required, must match a registered URL exactly |
+| `EB_PRIVATE_KEY_PATH`                    | `$BANK_SYNC_DATA_DIR/enablebanking.pem` |                                               |
+| `EB_COUNTRY`                             | `ES`                                    | banks listed in the picker                    |
+| `EB_ASPSP`                               | `imagin`                                | preselected bank (substring match)            |
+| `SYNC_INTERVAL_HOURS`                    | `8`                                     |                                               |
+| `ZENMONEY_TOKEN`                         | —                                       | enables the ZenMoney export                   |
+| `ZENMONEY_SERVER`                        | `ru`                                    | `ru` or `app` — where the token was issued    |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | —                                       | optional notifications                        |
+| `BANK_SYNC_DATA_DIR`                     | `/app/data`                             | SQLite lives here                             |
+| `PORT`                                   | `8080`                                  |                                               |
+| `LOG_LEVEL`                              | `info`                                  |                                               |
 
 See [`.env.example`](.env.example).
 
 ## API
 
-| | |
-| --- | --- |
+|                                                              |                                                                                                                                                          |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /api/transactions?from=YYYY-MM-DD&to=…&account=…&raw=1` | newest first; `amount` is a signed decimal string (negative = money out), `amount_cents` the same as an integer; `raw=1` adds the bank's original record |
-| `GET /export.csv?from=…&to=…` | same rows as CSV |
-| `GET /api/accounts` | accounts, balances, consent expiry, last error |
-| `GET /health` | liveness |
+| `GET /export.csv?from=…&to=…`                                | same rows as CSV                                                                                                                                         |
+| `GET /api/accounts`                                          | accounts, balances, consent expiry, last error                                                                                                           |
+| `GET /health`                                                | liveness                                                                                                                                                 |
 
 The SQLite file (`bank-sync.sqlite`) is yours to query directly too —
 table `transactions`, `amount_cents` signed.
@@ -154,9 +154,8 @@ table `transactions`, `amount_cents` signed.
 ## Development
 
 ```bash
-npm install
-npm run typecheck
-npm test
+npm install            # also sets up the git hooks
+npm run check          # format, lint, knip, typecheck, tests
 cp .env.example .env   # fill in, BANK_SYNC_DATA_DIR=./data
 node src/index.ts
 ```

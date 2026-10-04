@@ -6,7 +6,7 @@ import { suggestZenAccount, type ZenExporter } from '../zenmoney/export.ts';
 import { isoDate } from '../sync.ts';
 import type { EnableBankingClient } from '../enablebanking/client.ts';
 import type { Aspsp } from '../enablebanking/types.ts';
-import type { Store, TransactionRow } from '../storage/types.ts';
+import type { TransactionRow } from '../storage/types.ts';
 import type { Syncer } from '../sync.ts';
 import type { Logger } from '../logger.ts';
 
@@ -35,8 +35,13 @@ class HttpError extends Error {
 
 /** Where this instance is reachable from the browser that's talking to it. */
 function returnBaseOf(req: IncomingMessage): string {
-  const proto = String(req.headers['x-forwarded-proto'] ?? 'http').split(',')[0]?.trim() || 'http';
-  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? 'localhost').split(',')[0]?.trim();
+  const proto =
+    String(req.headers['x-forwarded-proto'] ?? 'http')
+      .split(',')[0]
+      ?.trim() || 'http';
+  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? 'localhost')
+    .split(',')[0]
+    ?.trim();
   return `${proto}://${host}`;
 }
 
@@ -44,11 +49,15 @@ async function readForm(req: IncomingMessage): Promise<URLSearchParams> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
-    size += (chunk as Buffer).length;
+    // No encoding is set on the request, so chunks are Buffers.
+    if (!Buffer.isBuffer(chunk)) {
+      throw new HttpError(400, 'Unexpected request body');
+    }
+    size += chunk.length;
     if (size > MAX_BODY_BYTES) {
       throw new HttpError(413, 'Request body too large');
     }
-    chunks.push(chunk as Buffer);
+    chunks.push(chunk);
   }
   return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
 }
@@ -197,112 +206,137 @@ export function createApp(deps: ServerDeps): Server {
     }
   }
 
+  async function connect(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const form = await readForm(req);
+    const name = form.get('aspsp');
+    const aspsp = (await aspsps()).find((a) => a.name === name);
+    if (!aspsp) {
+      throw new HttpError(400, `Unknown bank: ${name}`);
+    }
+    redirect(res, await startConnect(deps, aspsp, returnBaseOf(req)));
+  }
+
+  /** Manual fallback for the redirect: the user pastes wherever the bank sent them. */
+  async function pastedCallback(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const pasted = ((await readForm(req)).get('url') ?? '').trim();
+    const query = pasted.includes('?') ? pasted.slice(pasted.indexOf('?') + 1) : pasted;
+    await finishConnect(new URLSearchParams(query.split('#')[0]), res);
+  }
+
+  function sync(res: ServerResponse): void {
+    deps.syncer.run('manual').catch((err: unknown) => deps.log.error({ err }, 'manual sync crashed'));
+    flashRedirect(res, 'ok', 'Sync started — refresh the page in a minute.');
+  }
+
+  function exportToZen(zen: NonNullable<ServerDeps['zen']>): void {
+    zen.run().catch((err: unknown) => deps.log.error({ err }, 'zenmoney export crashed'));
+  }
+
+  async function mapZenAccount(zen: NonNullable<ServerDeps['zen']>, req: IncomingMessage, res: ServerResponse) {
+    const form = await readForm(req);
+    const accountKey = form.get('account') ?? '';
+    const zmAccount = form.get('zm_account') || null;
+    const since = form.get('since') || null;
+    if (zmAccount && !(since && /^\d{4}-\d{2}-\d{2}$/.test(since))) {
+      throw new HttpError(400, 'Pick the date to export from.');
+    }
+    if (!deps.store.listAccounts().some((a) => a.accountKey === accountKey)) {
+      throw new HttpError(400, 'Unknown account.');
+    }
+    deps.store.setZenMapping(accountKey, zmAccount, zmAccount ? since : null);
+    if (zmAccount) {
+      exportToZen(zen);
+    }
+    flashRedirect(
+      res,
+      'ok',
+      zmAccount ? 'Saved — exporting to ZenMoney now.' : 'ZenMoney export turned off for this account.',
+    );
+  }
+
+  async function revokeSession(sessionId: string, res: ServerResponse): Promise<void> {
+    try {
+      await deps.client.deleteSession(sessionId);
+    } catch (err) {
+      // Already expired/revoked on their side is fine — we still forget it locally.
+      deps.log.warn({ err, sessionId }, 'remote session delete failed');
+    }
+    deps.store.revokeSession(sessionId, deps.now().getTime());
+    flashRedirect(res, 'ok', 'Access revoked.');
+  }
+
+  function accountsJson(res: ServerResponse): void {
+    sendJson(res, 200, {
+      accounts: deps.store.listAccounts().map((a) => ({
+        account: a.accountKey,
+        bank: a.aspspName,
+        name: a.name,
+        iban: a.iban,
+        currency: a.currency,
+        balance: a.balanceCents === null ? null : formatCents(a.balanceCents),
+        balance_cents: a.balanceCents,
+        balance_currency: a.balanceCurrency,
+        last_synced_at: a.lastSyncedAt === null ? null : new Date(a.lastSyncedAt).toISOString(),
+        last_error: a.lastError,
+        consent_valid_until: a.validUntil,
+        revoked: a.revokedAt !== null,
+      })),
+    });
+  }
+
+  function csv(url: URL, res: ServerResponse): void {
+    res.writeHead(200, {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': 'attachment; filename="transactions.csv"',
+    });
+    res.end(toCsv(deps.store.queryTransactions(txQuery(url))));
+  }
+
+  type Handler = (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<void> | void;
+
+  const zen = deps.zen;
+  const routes = new Map<string, Handler>([
+    ['GET /health', (_req, res) => sendJson(res, 200, { ok: true })],
+    ['GET /', (_req, res, url) => page(url, res)],
+    ['POST /connect', connect],
+    ['GET /callback', (_req, res, url) => finishConnect(url.searchParams, res)],
+    ['POST /callback', pastedCallback],
+    ['POST /sync', (_req, res) => sync(res)],
+    ['GET /api/accounts', (_req, res) => accountsJson(res)],
+    [
+      'GET /api/transactions',
+      (_req, res, url) => {
+        const withRaw = url.searchParams.get('raw') === '1';
+        sendJson(res, 200, { transactions: deps.store.queryTransactions(txQuery(url)).map((t) => txJson(t, withRaw)) });
+      },
+    ],
+    ['GET /export.csv', (_req, res, url) => csv(url, res)],
+    // Only when ZenMoney export is configured; otherwise these are 404s.
+    ...(zen
+      ? ([
+          ['POST /zenmoney/map', (req, res) => mapZenAccount(zen, req, res)],
+          [
+            'POST /zenmoney/export',
+            (_req, res) => {
+              exportToZen(zen);
+              flashRedirect(res, 'ok', 'Export started — refresh in a few seconds.');
+            },
+          ],
+        ] satisfies [string, Handler][])
+      : []),
+  ]);
+
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
-    const path = url.pathname;
-
-    if (method === 'GET' && path === '/health') {
-      sendJson(res, 200, { ok: true });
+    const handler = routes.get(`${method} ${url.pathname}`);
+    if (handler) {
+      await handler(req, res, url);
       return;
     }
-    if (method === 'GET' && path === '/') {
-      await page(url, res);
-      return;
-    }
-    if (method === 'POST' && path === '/connect') {
-      const form = await readForm(req);
-      const name = form.get('aspsp');
-      const aspsp = (await aspsps()).find((a) => a.name === name);
-      if (!aspsp) {
-        throw new HttpError(400, `Unknown bank: ${name}`);
-      }
-      redirect(res, await startConnect(deps, aspsp, returnBaseOf(req)));
-      return;
-    }
-    if (method === 'GET' && path === '/callback') {
-      await finishConnect(url.searchParams, res);
-      return;
-    }
-    if (method === 'POST' && path === '/callback') {
-      // Manual fallback: the user pastes wherever the bank sent them.
-      const pasted = ((await readForm(req)).get('url') ?? '').trim();
-      const query = pasted.includes('?') ? pasted.slice(pasted.indexOf('?') + 1) : pasted;
-      await finishConnect(new URLSearchParams(query.split('#')[0]), res);
-      return;
-    }
-    if (method === 'POST' && path === '/sync') {
-      deps.syncer.run('manual').catch((err: unknown) => deps.log.error({ err }, 'manual sync crashed'));
-      flashRedirect(res, 'ok', 'Sync started — refresh the page in a minute.');
-      return;
-    }
-    if (method === 'POST' && path === '/zenmoney/map' && deps.zen) {
-      const form = await readForm(req);
-      const accountKey = form.get('account') ?? '';
-      const zmAccount = form.get('zm_account') || null;
-      const since = form.get('since') || null;
-      if (zmAccount && !(since && /^\d{4}-\d{2}-\d{2}$/.test(since))) {
-        throw new HttpError(400, 'Pick the date to export from.');
-      }
-      if (!deps.store.listAccounts().some((a) => a.accountKey === accountKey)) {
-        throw new HttpError(400, 'Unknown account.');
-      }
-      deps.store.setZenMapping(accountKey, zmAccount, zmAccount ? since : null);
-      if (zmAccount) {
-        deps.zen.run().catch((err: unknown) => deps.log.error({ err }, 'zenmoney export crashed'));
-      }
-      flashRedirect(res, 'ok', zmAccount ? 'Saved — exporting to ZenMoney now.' : 'ZenMoney export turned off for this account.');
-      return;
-    }
-    if (method === 'POST' && path === '/zenmoney/export' && deps.zen) {
-      deps.zen.run().catch((err: unknown) => deps.log.error({ err }, 'zenmoney export crashed'));
-      flashRedirect(res, 'ok', 'Export started — refresh in a few seconds.');
-      return;
-    }
-    const del = /^\/sessions\/([^/]+)\/delete$/.exec(path);
+    const del = /^\/sessions\/([^/]+)\/delete$/.exec(url.pathname);
     if (method === 'POST' && del) {
-      const sessionId = decodeURIComponent(del[1] ?? '');
-      try {
-        await deps.client.deleteSession(sessionId);
-      } catch (err) {
-        // Already expired/revoked on their side is fine — we still forget it locally.
-        deps.log.warn({ err, sessionId }, 'remote session delete failed');
-      }
-      deps.store.revokeSession(sessionId, deps.now().getTime());
-      flashRedirect(res, 'ok', 'Access revoked.');
-      return;
-    }
-    if (method === 'GET' && path === '/api/accounts') {
-      sendJson(res, 200, {
-        accounts: deps.store.listAccounts().map((a) => ({
-          account: a.accountKey,
-          bank: a.aspspName,
-          name: a.name,
-          iban: a.iban,
-          currency: a.currency,
-          balance: a.balanceCents === null ? null : formatCents(a.balanceCents),
-          balance_cents: a.balanceCents,
-          balance_currency: a.balanceCurrency,
-          last_synced_at: a.lastSyncedAt === null ? null : new Date(a.lastSyncedAt).toISOString(),
-          last_error: a.lastError,
-          consent_valid_until: a.validUntil,
-          revoked: a.revokedAt !== null,
-        })),
-      });
-      return;
-    }
-    if (method === 'GET' && path === '/api/transactions') {
-      const withRaw = url.searchParams.get('raw') === '1';
-      const rows = deps.store.queryTransactions(txQuery(url));
-      sendJson(res, 200, { transactions: rows.map((t) => txJson(t, withRaw)) });
-      return;
-    }
-    if (method === 'GET' && path === '/export.csv') {
-      res.writeHead(200, {
-        'content-type': 'text/csv; charset=utf-8',
-        'content-disposition': 'attachment; filename="transactions.csv"',
-      });
-      res.end(toCsv(deps.store.queryTransactions(txQuery(url))));
+      await revokeSession(decodeURIComponent(del[1] ?? ''), res);
       return;
     }
     throw new HttpError(404, 'Not found');

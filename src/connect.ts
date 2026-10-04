@@ -6,7 +6,7 @@ import type { Syncer } from './sync.ts';
 import type { Logger } from './logger.ts';
 
 /** How long a started-but-unfinished bank login stays redeemable. */
-export const AUTH_REQUEST_TTL_MS = 60 * 60_000;
+const AUTH_REQUEST_TTL_MS = 60 * 60_000;
 /** Ask for a little less than the bank's maximum so clock skew can't push us over it. */
 const CONSENT_MARGIN_MS = 10 * 60_000;
 

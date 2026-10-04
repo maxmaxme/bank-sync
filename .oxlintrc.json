@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "node", "vitest"],
+  "jsPlugins": ["./tools/oxlint-complexity.mjs"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "rules": {
+    "sonarjs/cognitive-complexity": ["error", 15],
+    "typescript/no-explicit-any": "error",
+    "typescript/consistent-type-imports": "error",
+    "eslint/eqeqeq": "error",
+    "eslint/no-var": "error",
+    "eslint/prefer-const": "error",
+    "eslint/no-unused-vars": [
+      "error",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_", "ignoreRestSiblings": true }
+    ],
+    "import/no-cycle": "error",
+    "eslint/require-await": "error",
+    "unicorn/prefer-string-replace-all": "error",
+    // One loop, nothing in parallel (see CLAUDE.md): awaiting in a loop is the design.
+    "eslint/no-await-in-loop": "off",
+    // Spreading small, fresh objects in map() is clearer than mutating; the arrays here are tiny.
+    "oxc/no-map-spread": "off"
+  },
+  "overrides": [
+    {
+      "files": ["tests/**"],
+      "rules": {
+        "unicorn/consistent-function-scoping": "off",
+        // Stubs mirror async APIs without awaiting anything.
+        "eslint/require-await": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["coverage/**", "data/**"]
+}

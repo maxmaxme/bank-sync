@@ -11,7 +11,7 @@ const BATCH = 100;
 const MAX_BATCHES_PER_ACCOUNT = 20;
 const REFERENCE_CACHE_MS = 10 * 60_000;
 /** Ids written to rows we deliberately never send (zero amounts). */
-export const SKIPPED_ZM_ID = 'skipped';
+const SKIPPED_ZM_ID = 'skipped';
 export const LAST_EXPORT_KV = 'zm_last_export';
 const LAST_EXPORT_OK_KV = 'zm_last_export_ok';
 
@@ -56,7 +56,7 @@ export function zmIdFor(accountKey: string, txKey: string): string {
 
 /** ZenMoney's own bank imports keep the last 4 digits of the account number in `syncID`. */
 export function suggestZenAccount(bank: Pick<AccountRow, 'iban'>, accounts: readonly ZmAccount[]): ZmAccount | null {
-  const last4 = bank.iban?.replace(/\s/g, '').slice(-4);
+  const last4 = bank.iban?.replaceAll(/\s/g, '').slice(-4);
   if (!last4) {
     return null;
   }
@@ -70,7 +70,7 @@ function mccOf(row: TransactionRow): number | null {
   return Number.isFinite(mcc) ? mcc : null;
 }
 
-export function toZmTransaction(
+function toZmTransaction(
   row: TransactionRow,
   account: ZmAccount,
   instrument: number,
@@ -140,7 +140,7 @@ export class ZenExporter {
     const ref: ZenReference = {
       accounts: (diff.account ?? [])
         .filter((a) => !a.archive && a.type !== 'debt')
-        .sort((a, b) => a.title.localeCompare(b.title)),
+        .toSorted((a, b) => a.title.localeCompare(b.title)),
       currencies: new Map((diff.instrument ?? []).map((i) => [i.id, i.shortTitle])),
     };
     this.cache = { at: now, ref };
@@ -210,16 +210,7 @@ export class ZenExporter {
       const currency = ref.currencies.get(instrument);
 
       const nowMs = this.deps.now().getTime();
-      const sendable: TransactionRow[] = [];
-      for (const row of rows) {
-        if (row.amountCents === 0) {
-          store.markExported(account.accountKey, row.txKey, SKIPPED_ZM_ID, nowMs);
-        } else if (row.currency !== currency) {
-          throw new Error(`transaction in ${row.currency}, but the ZenMoney account is in ${currency ?? '?'}`);
-        } else {
-          sendable.push(row);
-        }
-      }
+      const sendable = this.sendable(account, rows, currency, nowMs);
       if (sendable.length === 0) {
         continue;
       }
@@ -238,6 +229,26 @@ export class ZenExporter {
       exported += sendable.length;
     }
     return exported;
+  }
+
+  /** Rows worth sending: zero amounts are marked skipped, a currency mismatch is an error. */
+  private sendable(
+    account: MappedAccount,
+    rows: readonly TransactionRow[],
+    currency: string | undefined,
+    nowMs: number,
+  ): TransactionRow[] {
+    const out: TransactionRow[] = [];
+    for (const row of rows) {
+      if (row.amountCents === 0) {
+        this.deps.store.markExported(account.accountKey, row.txKey, SKIPPED_ZM_ID, nowMs);
+      } else if (row.currency === currency) {
+        out.push(row);
+      } else {
+        throw new Error(`transaction in ${row.currency}, but the ZenMoney account is in ${currency ?? '?'}`);
+      }
+    }
+    return out;
   }
 
   /** ZenMoney's own payee → merchant/category guess. Best effort: no suggestion is fine. */

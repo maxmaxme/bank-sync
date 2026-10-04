@@ -1,4 +1,3 @@
-import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionResponse } from '../src/enablebanking/types.ts';
@@ -54,7 +53,11 @@ beforeEach(async () => {
     now: () => NOW,
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('server is not listening on a TCP port');
+  }
+  base = `http://127.0.0.1:${address.port}`;
 });
 
 afterEach(async () => {
@@ -103,7 +106,14 @@ describe('web app', () => {
 
   it('serves transactions as JSON and CSV', async () => {
     store.saveSession(
-      { sessionId: 's1', aspspName: 'imagin', aspspCountry: 'ES', validUntil: '2027-01-01T00:00:00Z', createdAt: 0, revokedAt: null },
+      {
+        sessionId: 's1',
+        aspspName: 'imagin',
+        aspspCountry: 'ES',
+        validUntil: '2027-01-01T00:00:00Z',
+        createdAt: 0,
+        revokedAt: null,
+      },
       [{ accountKey: 'hash-A', uid: 'u', iban: null, name: null, currency: 'EUR' }],
     );
     store.applyTransactions('hash-A', '2026-01-01', normalizeTransactions([tx()]), 0);
@@ -121,7 +131,7 @@ describe('web app', () => {
 describe('toCsv', () => {
   it('quotes cells with commas and quotes', () => {
     const [row] = normalizeTransactions([tx({ remittance_information: ['Pago "A", B'] })]);
-    const csv = toCsv([{ ...row!, accountKey: 'k', firstSeenAt: 0, updatedAt: 0, zmId: null, zmPushedAt: null }]);
+    const csv = toCsv([{ ...row, accountKey: 'k', firstSeenAt: 0, updatedAt: 0, zmId: null, zmPushedAt: null }]);
     expect(csv).toContain('"Pago ""A"", B"');
   });
 });

@@ -6,7 +6,8 @@ WORKDIR /app
 # nothing to compile for arm64.
 COPY package.json package-lock.json ./
 # --omit=optional: valibot's optional typescript peer would otherwise ship tsc in the image.
-RUN npm ci --omit=dev --omit=optional
+# --ignore-scripts: the only script is `prepare` (git hooks, dev-only); runtime deps are pure JS.
+RUN npm ci --omit=dev --omit=optional --ignore-scripts
 
 COPY tsconfig.json ./
 COPY src ./src

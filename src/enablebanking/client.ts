@@ -20,7 +20,7 @@ import {
   type TransactionsPage,
 } from './types.ts';
 
-export const DEFAULT_BASE_URL = 'https://api.enablebanking.com';
+const DEFAULT_BASE_URL = 'https://api.enablebanking.com';
 
 export class EnableBankingError extends Error {
   readonly status: number;

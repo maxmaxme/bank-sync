@@ -17,15 +17,22 @@ arm64) on every push to `main`. Deployment is someone else's job.
 ## Commands
 
 ```bash
-npm install
-npm run typecheck                 # tsc --noEmit
+npm install                       # also installs git hooks (lefthook)
+npm run check                     # format:check + lint + knip + typecheck + test — what CI runs
+npm run format                    # oxfmt
+npm run lint                      # oxlint, type-aware (incl. Sonar cognitive complexity ≤ 15)
+npm run knip                      # unused files, exports, dependencies
 npm test                          # vitest run
 npx vitest run tests/sync.test.ts -t "name"
 node src/index.ts                 # needs EB_APP_ID, EB_REDIRECT_URL, key file
 ```
 
-`.env` next to `package.json` is auto-loaded. No lint/format script —
-`typecheck` + `test` are the verification path.
+`.env` next to `package.json` is auto-loaded. Hooks: pre-commit formats and
+lints staged files, pre-push runs the full check. The complexity rule is
+loaded on its own from `tools/oxlint-complexity.mjs` — the whole
+eslint-plugin-sonarjs needs the TypeScript JS API, which TypeScript 7
+doesn't have. SQLite rows are parsed with valibot schemas too
+(`src/storage/sqlite.ts`), so a schema drift fails at the query.
 
 ## Critical conventions
 

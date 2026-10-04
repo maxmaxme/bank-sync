@@ -1,9 +1,8 @@
 import pino from 'pino';
 import type { Transaction } from '../src/enablebanking/types.ts';
 import type { Notifier } from '../src/notify/types.ts';
-import type { Logger } from '../src/logger.ts';
 
-export const silentLog = pino({ level: 'silent' }) as unknown as Logger;
+export const silentLog = pino({ level: 'silent' });
 
 export function tx(overrides: Partial<Transaction> = {}): Transaction {
   return {
@@ -38,4 +37,12 @@ export class RecordingNotifier implements Notifier {
   async exportRecovered() {
     this.events.push('export-recovered');
   }
+}
+
+/** The JSON text a stubbed fetch was called with. */
+export function requestBody(init: RequestInit | undefined): string {
+  if (typeof init?.body !== 'string') {
+    throw new TypeError('expected a JSON string body');
+  }
+  return init.body;
 }

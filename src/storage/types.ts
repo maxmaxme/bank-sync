@@ -65,7 +65,7 @@ export interface TransactionRow extends NewTransaction {
   zmPushedAt: number | null;
 }
 
-export interface TransactionQuery {
+interface TransactionQuery {
   from?: string;
   to?: string;
   accountKey?: string;
@@ -96,9 +96,7 @@ export interface Store {
   listAccounts(): AccountView[];
   recordAccountSync(
     accountKey: string,
-    result:
-      | { ok: true; balanceCents: number | null; balanceCurrency: string | null }
-      | { ok: false; error: string },
+    result: { ok: true; balanceCents: number | null; balanceCurrency: string | null } | { ok: false; error: string },
     now: number,
   ): void;
 

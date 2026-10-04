@@ -50,9 +50,7 @@ describe('normalizeTransactions', () => {
   });
 
   it('dates pending rows by transaction date when there is no booking date', () => {
-    const [row] = normalizeTransactions([
-      tx({ status: 'PDNG', booking_date: null, transaction_date: '2026-10-02' }),
-    ]);
+    const [row] = normalizeTransactions([tx({ status: 'PDNG', booking_date: null, transaction_date: '2026-10-02' })]);
     expect(row?.txDate).toBe('2026-10-02');
   });
 });

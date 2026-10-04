@@ -13,7 +13,6 @@ const AmountSchema = v.looseObject({
   currency: v.string(),
   amount: v.string(),
 });
-export type Amount = v.InferOutput<typeof AmountSchema>;
 
 export const ApplicationSchema = v.object({
   name: v.string(),
@@ -74,13 +73,12 @@ export type SessionResponse = v.InferOutput<typeof SessionResponseSchema>;
 const PartySchema = v.looseObject({
   name: nullishString,
 });
-export type Party = v.InferOutput<typeof PartySchema>;
 
 /**
  * Stored verbatim (`transactions.raw`) and served back by the JSON export, so
  * every object in it is loose: fields we don't model survive the parse.
  */
-export const TransactionSchema = v.looseObject({
+const TransactionSchema = v.looseObject({
   /** ASPSP id, immutable across sessions for the same account (not globally unique). */
   entry_reference: nullishString,
   transaction_id: nullishString,
