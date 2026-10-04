@@ -34,15 +34,27 @@ use `.ts`; no `enum` / `namespace` / parameter properties / decorators
 (`erasableSyntaxOnly` enforces it). Declare class fields explicitly.
 
 **Zero native deps.** SQLite is the built-in `node:sqlite`
-(`DatabaseSync`), JWT signing is `node:crypto`, HTTP is `node:http`. Only
-runtime dep is `pino`. Keep it that way — the image is cross-built for
-arm64 under QEMU.
+(`DatabaseSync`), JWT signing is `node:crypto`, HTTP is `node:http`. The
+only runtime deps are `pino` and `valibot` (pure JS). Keep it that way —
+the image is cross-built for arm64 under QEMU. The Dockerfile installs
+with `--omit=optional` so valibot's optional `typescript` peer stays out.
+
+**Outside data is parsed, never cast.** Anything from outside the process
+— API responses, env values with a fixed set, JSON we stored in `kv` /
+`transactions.raw` — goes through a valibot schema (`import * as v`,
+schema next to the code, type via `v.InferOutput`, `v.safeParse` → a
+domain error with `v.summarize(issues)`); `parseJson` (`src/json.ts`)
+returns `undefined` instead of throwing. Validate only the fields we read.
+Anything stored raw or written back (PSD2 `Transaction`, incl. its nested
+objects) is a `v.looseObject` so unknown fields survive.
 
 **API shapes come from the real spec**, <https://enablebanking.com/docs/api/reference/>
 (server-rendered; grep it rather than trusting summaries). Notable:
 errors are `{message, code, error, detail}`; `credit_debit_indicator` is
 `CRDT|DBIT`; `strategy` is `default|longest`; `maximum_consent_validity`
-is seconds; `continuation_key` is null on the last page.
+is seconds; `continuation_key` is null on the last page; an account's
+`uid` is absent when the bank can't serve it (blocked/closed — skipped on
+connect).
 
 **Identity across re-consents.** Account `uid` changes with every
 session → accounts are keyed by `identification_hash`
@@ -89,10 +101,11 @@ infra specifics out of code, docs and commit messages.
 src/index.ts              # entry — config, self-check (GET /application), server, scheduler
 src/config.ts             # env → Config
 src/env.ts                # requireEnv / optionalEnv / .env loading
+src/json.ts               # parseJson — JSON.parse that returns undefined on bad input
 src/enablebanking/
   client.ts               # REST client + EnableBankingError
   jwt.ts                  # RS256 app JWT (kid = app id, 1 h TTL)
-  types.ts                # API shapes (subset)
+  types.ts                # API shapes (subset), as valibot schemas
 src/connect.ts            # start auth / complete auth (state, session → accounts)
 src/sync.ts               # Syncer: per-account fetch → normalize → store; notifications on transitions
 src/transactions.ts       # PSD2 transaction → row (key, signed cents, counterparty, description)

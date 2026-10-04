@@ -32,5 +32,8 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({ EB_APP_ID: 'a', EB_REDIRECT_URL: 'https://x/cb', SYNC_INTERVAL_HOURS: '0.5' }, read),
     ).toThrow(/SYNC_INTERVAL_HOURS/);
+    expect(() =>
+      loadConfig({ EB_APP_ID: 'a', EB_REDIRECT_URL: 'https://x/cb', ZENMONEY_SERVER: 'com' }, read),
+    ).toThrow('ZENMONEY_SERVER must be one of ru, app, got com');
   });
 });

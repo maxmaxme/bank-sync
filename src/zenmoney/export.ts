@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import * as v from 'valibot';
 import { ZenMoneyError } from './client.ts';
 import type { ZenMoneyApi, ZmAccount, ZmSuggestion, ZmTransaction } from './types.ts';
-import type { Transaction } from '../enablebanking/types.ts';
-import type { AccountRow, Store, TransactionRow } from '../storage/types.ts';
+import { parseJson } from '../json.ts';
+import type { AccountRow, AccountView, Store, TransactionRow } from '../storage/types.ts';
 import type { Notifier } from '../notify/types.ts';
 import type { Logger } from '../logger.ts';
 
@@ -29,12 +30,20 @@ export interface ZenReference {
   currencies: Map<number, string>;
 }
 
-export interface ExportResult {
-  at: number;
-  ok: boolean;
-  exported: number;
-  error: string | null;
-}
+// Stored as JSON in kv; a value that doesn't fit reads as "no result yet".
+const ExportResultSchema = v.object({
+  at: v.number(),
+  ok: v.boolean(),
+  exported: v.number(),
+  error: v.nullable(v.string()),
+});
+export type ExportResult = v.InferOutput<typeof ExportResultSchema>;
+
+/** The one field of the stored PSD2 transaction the export needs. */
+const MccSchema = v.object({ merchant_category_code: v.nullish(v.string()) });
+
+/** A bank account with a ZenMoney target and start date chosen in the UI. */
+type MappedAccount = AccountRow & { zmAccountId: string; zmSince: string };
 
 /**
  * ZenMoney transaction id derived from our own row key, so a retry after a
@@ -56,13 +65,9 @@ export function suggestZenAccount(bank: Pick<AccountRow, 'iban'>, accounts: read
 }
 
 function mccOf(row: TransactionRow): number | null {
-  try {
-    const raw = JSON.parse(row.raw) as Transaction;
-    const mcc = Number.parseInt(raw.merchant_category_code ?? '', 10);
-    return Number.isFinite(mcc) ? mcc : null;
-  } catch {
-    return null;
-  }
+  const parsed = v.safeParse(MccSchema, parseJson(row.raw));
+  const mcc = Number.parseInt((parsed.success && parsed.output.merchant_category_code) || '', 10);
+  return Number.isFinite(mcc) ? mcc : null;
 }
 
 export function toZmTransaction(
@@ -144,7 +149,8 @@ export class ZenExporter {
 
   lastResult(): ExportResult | null {
     const raw = this.deps.store.getKv(LAST_EXPORT_KV);
-    return raw ? (JSON.parse(raw) as ExportResult) : null;
+    const parsed = v.safeParse(ExportResultSchema, raw ? parseJson(raw) : undefined);
+    return parsed.success ? parsed.output : null;
   }
 
   run(): Promise<ExportResult> {
@@ -163,7 +169,9 @@ export class ZenExporter {
     const errors: string[] = [];
     let authError = false;
 
-    const mapped = store.listAccounts().filter((a) => a.zmAccountId && a.zmSince);
+    const mapped = store
+      .listAccounts()
+      .filter((a): a is AccountView & MappedAccount => Boolean(a.zmAccountId && a.zmSince));
     for (const account of mapped) {
       try {
         exported += await this.exportAccount(account);
@@ -184,13 +192,12 @@ export class ZenExporter {
     return result;
   }
 
-  private async exportAccount(account: AccountRow): Promise<number> {
+  private async exportAccount(account: MappedAccount): Promise<number> {
     const { store, api } = this.deps;
-    const since = account.zmSince as string;
     let exported = 0;
 
     for (let batch = 0; batch < MAX_BATCHES_PER_ACCOUNT; batch++) {
-      const rows = store.unexportedTransactions(account.accountKey, since, BATCH);
+      const rows = store.unexportedTransactions(account.accountKey, account.zmSince, BATCH);
       if (rows.length === 0) {
         break;
       }
@@ -199,7 +206,8 @@ export class ZenExporter {
       if (!target || target.instrument === null) {
         throw new Error('the chosen ZenMoney account no longer exists (or is archived) — pick another one');
       }
-      const currency = ref.currencies.get(target.instrument);
+      const instrument = target.instrument;
+      const currency = ref.currencies.get(instrument);
 
       const nowMs = this.deps.now().getTime();
       const sendable: TransactionRow[] = [];
@@ -218,13 +226,14 @@ export class ZenExporter {
 
       const suggestions = await this.suggest(sendable);
       const nowSec = Math.floor(nowMs / 1000);
-      const transactions = sendable.map((row, i) =>
-        toZmTransaction(row, target, target.instrument as number, suggestions[i], nowSec),
-      );
-      await api.diff({ serverTimestamp: nowSec, transaction: transactions });
+      const sent = sendable.map((row, i) => ({
+        row,
+        zm: toZmTransaction(row, target, instrument, suggestions[i], nowSec),
+      }));
+      await api.diff({ serverTimestamp: nowSec, transaction: sent.map((s) => s.zm) });
 
-      for (const [i, row] of sendable.entries()) {
-        store.markExported(account.accountKey, row.txKey, transactions[i]?.id as string, nowMs);
+      for (const { row, zm } of sent) {
+        store.markExported(account.accountKey, row.txKey, zm.id, nowMs);
       }
       exported += sendable.length;
     }
@@ -233,12 +242,12 @@ export class ZenExporter {
 
   /** ZenMoney's own payee → merchant/category guess. Best effort: no suggestion is fine. */
   private async suggest(rows: readonly TransactionRow[]): Promise<(ZmSuggestion | undefined)[]> {
-    const withPayee = rows.map((r, i) => ({ i, payee: r.counterparty })).filter((x) => x.payee);
+    const withPayee = rows.flatMap((r, i) => (r.counterparty ? [{ i, payee: r.counterparty }] : []));
     if (withPayee.length === 0) {
       return [];
     }
     try {
-      const res = await this.deps.api.suggest(withPayee.map((x) => ({ payee: x.payee as string })));
+      const res = await this.deps.api.suggest(withPayee.map((x) => ({ payee: x.payee })));
       const out: (ZmSuggestion | undefined)[] = [];
       withPayee.forEach((x, j) => {
         out[x.i] = res[j];

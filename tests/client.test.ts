@@ -2,6 +2,7 @@ import { generateKeyPairSync, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { EnableBankingClient, EnableBankingError } from '../src/enablebanking/client.ts';
 import { signAppJwt } from '../src/enablebanking/jwt.ts';
+import { normalizeTransactions } from '../src/transactions.ts';
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -81,5 +82,35 @@ describe('EnableBankingClient', () => {
     expect(err).toBeInstanceOf(EnableBankingError);
     expect(err).toMatchObject({ status: 429, code: 'ASPSP_RATE_LIMIT_EXCEEDED' });
     expect((err as Error).message).toContain('ASPSP Rate limit exceeded');
+  });
+
+  it('keeps transaction fields it does not model, nested ones too — they are stored raw', async () => {
+    const bankTx = {
+      entry_reference: 'ref-1',
+      transaction_amount: { currency: 'EUR', amount: '12.34' },
+      credit_debit_indicator: 'DBIT',
+      status: 'BOOK',
+      creditor: { name: 'SHOP', postal_address: { country: 'ES' } },
+      balance_after_transaction: { currency: 'EUR', amount: '100.00' },
+    };
+    const { client } = clientWith(() => Response.json({ transactions: [bankTx], continuation_key: null }));
+    const page = await client.getTransactions('acc-1', { dateFrom: '2026-01-01' });
+    expect(JSON.parse(normalizeTransactions(page.transactions)[0]?.raw ?? '')).toEqual(bankTx);
+  });
+
+  it('a response that does not match the spec is an EnableBankingError, not a crash further down', async () => {
+    const bad = { transaction_amount: { currency: 'EUR', amount: 12.34 }, credit_debit_indicator: 'DBIT' };
+    const { client } = clientWith(() => Response.json({ transactions: [bad] }));
+    const err = await client.getTransactions('acc-1', { dateFrom: '2026-01-01' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EnableBankingError);
+    expect(err).toMatchObject({ status: 200, code: null });
+    expect((err as Error).message).toMatch(/\/accounts\/acc-1\/transactions .*unexpected response.*amount/s);
+  });
+
+  it('keeps the raw body of an error that is not an ErrorResponse', async () => {
+    const { client } = clientWith(() => new Response('<html>Bad Gateway</html>', { status: 502 }));
+    const err = await client.getBalances('acc-1').catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 502, code: null });
+    expect((err as Error).message).toContain('<html>Bad Gateway</html>');
   });
 });

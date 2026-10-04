@@ -1,14 +1,23 @@
 import { createPrivateKey, type KeyObject } from 'node:crypto';
+import * as v from 'valibot';
+import { parseJson } from '../json.ts';
 import { signAppJwt } from './jwt.ts';
-import type {
-  AccountApi,
-  Application,
-  Aspsp,
-  AspspRef,
-  BalancesResponse,
-  SessionResponse,
-  StartAuthResponse,
-  TransactionsPage,
+import {
+  ApplicationSchema,
+  AspspsResponseSchema,
+  BalancesResponseSchema,
+  ErrorResponseSchema,
+  SessionResponseSchema,
+  StartAuthResponseSchema,
+  TransactionsPageSchema,
+  type AccountApi,
+  type Application,
+  type Aspsp,
+  type AspspRef,
+  type BalancesResponse,
+  type SessionResponse,
+  type StartAuthResponse,
+  type TransactionsPage,
 } from './types.ts';
 
 export const DEFAULT_BASE_URL = 'https://api.enablebanking.com';
@@ -53,11 +62,11 @@ export class EnableBankingClient implements AccountApi {
 
   /** The application this key belongs to — handy for checking setup (environment, redirect URLs). */
   getApplication(): Promise<Application> {
-    return this.request('GET', '/application');
+    return this.request(ApplicationSchema, 'GET', '/application');
   }
 
   async listAspsps(country: string): Promise<Aspsp[]> {
-    const res = await this.request<{ aspsps: Aspsp[] }>('GET', '/aspsps', {
+    const res = await this.request(AspspsResponseSchema, 'GET', '/aspsps', {
       query: { country, psu_type: 'personal' },
     });
     return res.aspsps;
@@ -69,7 +78,7 @@ export class EnableBankingClient implements AccountApi {
     state: string;
     redirectUrl: string;
   }): Promise<StartAuthResponse> {
-    return this.request('POST', '/auth', {
+    return this.request(StartAuthResponseSchema, 'POST', '/auth', {
       body: {
         access: { valid_until: input.validUntil.toISOString() },
         aspsp: input.aspsp,
@@ -81,18 +90,19 @@ export class EnableBankingClient implements AccountApi {
   }
 
   createSession(code: string): Promise<SessionResponse> {
-    return this.request('POST', '/sessions', { body: { code } });
+    return this.request(SessionResponseSchema, 'POST', '/sessions', { body: { code } });
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    await this.request('DELETE', `/sessions/${encodeURIComponent(sessionId)}`);
+    // SuccessResponse — nothing in it we need.
+    await this.request(v.unknown(), 'DELETE', `/sessions/${encodeURIComponent(sessionId)}`);
   }
 
   getTransactions(
     accountUid: string,
     opts: { dateFrom: string; continuationKey?: string; strategy?: 'default' | 'longest' },
   ): Promise<TransactionsPage> {
-    return this.request('GET', `/accounts/${encodeURIComponent(accountUid)}/transactions`, {
+    return this.request(TransactionsPageSchema, 'GET', `/accounts/${encodeURIComponent(accountUid)}/transactions`, {
       query: {
         date_from: opts.dateFrom,
         continuation_key: opts.continuationKey,
@@ -102,18 +112,19 @@ export class EnableBankingClient implements AccountApi {
   }
 
   getBalances(accountUid: string): Promise<BalancesResponse> {
-    return this.request('GET', `/accounts/${encodeURIComponent(accountUid)}/balances`);
+    return this.request(BalancesResponseSchema, 'GET', `/accounts/${encodeURIComponent(accountUid)}/balances`);
   }
 
-  private async request<T>(
+  private async request<S extends v.GenericSchema>(
+    schema: S,
     method: string,
     path: string,
     opts: { query?: Query; body?: unknown } = {},
-  ): Promise<T> {
+  ): Promise<v.InferOutput<S>> {
     const url = new URL(path, this.baseUrl);
-    for (const [k, v] of Object.entries(opts.query ?? {})) {
-      if (v !== undefined) {
-        url.searchParams.set(k, v);
+    for (const [key, value] of Object.entries(opts.query ?? {})) {
+      if (value !== undefined) {
+        url.searchParams.set(key, value);
       }
     }
     const headers: Record<string, string> = {
@@ -133,24 +144,30 @@ export class EnableBankingClient implements AccountApi {
     if (!res.ok) {
       throw toError(method, path, res.status, text);
     }
-    return (text ? JSON.parse(text) : {}) as T;
+    const parsed = v.safeParse(schema, text ? parseJson(text) : undefined);
+    if (!parsed.success) {
+      // Fails here, with the path, rather than as a TypeError somewhere in sync.
+      throw new EnableBankingError(
+        res.status,
+        null,
+        `Enable Banking ${method} ${path} → ${res.status}: unexpected response — ${v.summarize(parsed.issues)}`,
+      );
+    }
+    return parsed.output;
   }
 }
 
 function toError(method: string, path: string, status: number, body: string): EnableBankingError {
   let code: string | null = null;
   let detail = body.slice(0, 500);
-  try {
-    // ErrorResponse: { message, code (= HTTP status), error (ErrorCode), detail }
-    const parsed = JSON.parse(body) as { message?: string; error?: string; detail?: unknown };
-    code = parsed.error ?? null;
+  const parsed = v.safeParse(ErrorResponseSchema, parseJson(body));
+  // Not an ErrorResponse (a proxy's HTML page, say) — keep the raw (truncated) body.
+  if (parsed.success) {
+    const { message, error, detail: more } = parsed.output;
+    code = error ?? null;
     const extra =
-      parsed.detail === undefined || parsed.detail === null
-        ? ''
-        : ` (${typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail)})`;
-    detail = `${parsed.message ?? ''}${extra}`.trim() || detail;
-  } catch {
-    // Not JSON — keep the raw (truncated) body.
+      more === undefined || more === null ? '' : ` (${typeof more === 'string' ? more : JSON.stringify(more)})`;
+    detail = `${message ?? ''}${extra}`.trim() || detail;
   }
   return new EnableBankingError(
     status,

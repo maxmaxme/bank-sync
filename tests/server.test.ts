@@ -33,8 +33,8 @@ beforeEach(async () => {
   server = createApp({
     client: {
       listAspsps: async () => [
-        { name: 'CaixaBank', country: 'ES', maximum_consent_validity: 15552000 },
-        { name: 'imagin', country: 'ES', maximum_consent_validity: 15552000 },
+        { name: 'CaixaBank', country: 'ES', maximum_consent_validity: 15552000, beta: false },
+        { name: 'imagin', country: 'ES', maximum_consent_validity: 15552000, beta: false },
       ],
       startAuth: async (input) => {
         authStates.push(input.state);

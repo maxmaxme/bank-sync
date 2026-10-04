@@ -1,99 +1,131 @@
-// Subset of the Enable Banking API shapes this service touches.
+// Subset of the Enable Banking API shapes this service touches, as schemas:
+// every response is parsed, not cast. Only the fields we read are listed;
+// required vs optional follows the spec, except where noted.
 // Reference: https://enablebanking.com/docs/api/reference/
 
-export interface Amount {
-  currency: string;
-  amount: string;
-}
+import * as v from 'valibot';
 
-export interface Application {
-  name: string;
-  kid: string;
+/** Absent or null — the spec's "not required" fields come back both ways. */
+const nullishString = v.nullish(v.string());
+
+// Loose: nested inside a Transaction, which is stored raw (see below).
+const AmountSchema = v.looseObject({
+  currency: v.string(),
+  amount: v.string(),
+});
+export type Amount = v.InferOutput<typeof AmountSchema>;
+
+export const ApplicationSchema = v.object({
+  name: v.string(),
   /** SANDBOX | PRODUCTION */
-  environment: string;
-  redirect_urls: string[];
-  active: boolean;
-  countries?: string[];
-  services?: string[];
-}
+  environment: v.string(),
+  redirect_urls: v.array(v.string()),
+  active: v.boolean(),
+});
+export type Application = v.InferOutput<typeof ApplicationSchema>;
 
-export interface Aspsp {
-  name: string;
-  country: string;
-  logo?: string;
+const AspspSchema = v.object({
+  name: v.string(),
+  country: v.string(),
   /** Seconds. */
-  maximum_consent_validity: number;
-  psu_types?: string[];
-  beta?: boolean;
+  maximum_consent_validity: v.number(),
+  // Required by the spec, but only shown as a label — a bank list without it is still usable.
+  beta: v.optional(v.boolean()),
   /** Headers that mark a data request as "PSU online" (all or none must be sent). */
-  required_psu_headers?: string[];
-}
+  required_psu_headers: v.nullish(v.array(v.string())),
+});
+export type Aspsp = v.InferOutput<typeof AspspSchema>;
 
-export interface AspspRef {
-  name: string;
-  country: string;
-}
+export const AspspsResponseSchema = v.object({ aspsps: v.array(AspspSchema) });
 
-export interface StartAuthResponse {
-  url: string;
-  authorization_id?: string;
-}
+const AspspRefSchema = v.object({
+  name: v.string(),
+  country: v.string(),
+});
+export type AspspRef = v.InferOutput<typeof AspspRefSchema>;
 
-export interface SessionAccount {
-  /** Valid only within this session; changes on every re-consent. */
-  uid: string;
+export const StartAuthResponseSchema = v.object({ url: v.string() });
+export type StartAuthResponse = v.InferOutput<typeof StartAuthResponseSchema>;
+
+// AccountResource in the spec.
+const SessionAccountSchema = v.object({
+  /**
+   * Valid only within this session; changes on every re-consent. Absent when
+   * the bank already knows the account can't be read (blocked, closed).
+   */
+  uid: nullishString,
   /** Global, stable across sessions — the right key for "same account". */
-  identification_hash: string;
-  account_id?: { iban?: string; other?: { identification?: string } } | null;
-  name?: string | null;
-  currency?: string | null;
-}
+  identification_hash: v.string(),
+  account_id: v.nullish(v.object({ iban: nullishString })),
+  name: nullishString,
+  // Required by the spec, but nothing breaks without it.
+  currency: nullishString,
+});
+export type SessionAccount = v.InferOutput<typeof SessionAccountSchema>;
 
-export interface SessionResponse {
-  session_id: string;
-  accounts: SessionAccount[];
-  aspsp: AspspRef;
-  access: { valid_until: string };
-}
+export const SessionResponseSchema = v.object({
+  session_id: v.string(),
+  accounts: v.array(SessionAccountSchema),
+  aspsp: AspspRefSchema,
+  access: v.object({ valid_until: v.string() }),
+});
+export type SessionResponse = v.InferOutput<typeof SessionResponseSchema>;
 
-export interface Party {
-  name?: string;
-}
+const PartySchema = v.looseObject({
+  name: nullishString,
+});
+export type Party = v.InferOutput<typeof PartySchema>;
 
-export interface Transaction {
+/**
+ * Stored verbatim (`transactions.raw`) and served back by the JSON export, so
+ * every object in it is loose: fields we don't model survive the parse.
+ */
+export const TransactionSchema = v.looseObject({
   /** ASPSP id, immutable across sessions for the same account (not globally unique). */
-  entry_reference?: string | null;
-  transaction_id?: string | null;
-  transaction_amount: Amount;
-  credit_debit_indicator: 'CRDT' | 'DBIT';
-  /** BOOK | PDNG | CNCL | HOLD | OTHR | RJCT | SCHD */
-  status: string;
-  booking_date?: string | null;
-  value_date?: string | null;
-  transaction_date?: string | null;
-  creditor?: Party | null;
-  debtor?: Party | null;
-  remittance_information?: string[] | null;
-  bank_transaction_code?: { description?: string | null } | null;
-  merchant_category_code?: string | null;
-  note?: string | null;
-}
+  entry_reference: nullishString,
+  transaction_id: nullishString,
+  transaction_amount: AmountSchema,
+  credit_debit_indicator: v.picklist(['CRDT', 'DBIT']),
+  /**
+   * BOOK | PDNG | CNCL | HOLD | OTHR | RJCT | SCHD. Required by the spec;
+   * a missing one reads as BOOK, and an unknown value isn't worth failing the page.
+   */
+  status: nullishString,
+  booking_date: nullishString,
+  value_date: nullishString,
+  transaction_date: nullishString,
+  creditor: v.nullish(PartySchema),
+  debtor: v.nullish(PartySchema),
+  remittance_information: v.nullish(v.array(v.string())),
+  bank_transaction_code: v.nullish(v.looseObject({ description: nullishString })),
+  merchant_category_code: nullishString,
+  note: nullishString,
+});
+export type Transaction = v.InferOutput<typeof TransactionSchema>;
 
-export interface TransactionsPage {
-  transactions: Transaction[];
-  continuation_key?: string | null;
-}
+export const TransactionsPageSchema = v.object({
+  transactions: v.array(TransactionSchema),
+  /** Null (or absent) on the last page. */
+  continuation_key: nullishString,
+});
+export type TransactionsPage = v.InferOutput<typeof TransactionsPageSchema>;
 
-export interface Balance {
-  name?: string;
-  balance_amount: Amount;
-  balance_type?: string;
-  reference_date?: string | null;
-}
+const BalanceSchema = v.object({
+  balance_amount: AmountSchema,
+  // Required by the spec; optional here because a missing one just means "no match" in sync.
+  balance_type: v.optional(v.string()),
+});
+export type Balance = v.InferOutput<typeof BalanceSchema>;
 
-export interface BalancesResponse {
-  balances: Balance[];
-}
+export const BalancesResponseSchema = v.object({ balances: v.array(BalanceSchema) });
+export type BalancesResponse = v.InferOutput<typeof BalancesResponseSchema>;
+
+/** ErrorResponse: `{ message, code (= HTTP status), error (ErrorCode), detail }`. Lenient: it only feeds a message. */
+export const ErrorResponseSchema = v.object({
+  message: nullishString,
+  error: nullishString,
+  detail: v.optional(v.unknown()),
+});
 
 /** The part of the client that sync depends on — kept small so tests can fake it. */
 export interface AccountApi {

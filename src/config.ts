@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import { optionalEnv, requireEnv, type Env } from './env.ts';
-import { ZENMONEY_SERVERS, type ZenMoneyServer } from './zenmoney/client.ts';
+import { ZenMoneyServerSchema, type ZenMoneyServer } from './zenmoney/types.ts';
 
 export interface Config {
   dataDir: string;
@@ -30,9 +31,11 @@ export function loadConfig(env: Env, readFile: (path: string) => string = readUt
   }
 
   const zmToken = optionalEnv(env, 'ZENMONEY_TOKEN');
-  const zmServer = requireEnv(env, 'ZENMONEY_SERVER', 'ru');
-  if (!(zmServer in ZENMONEY_SERVERS)) {
-    throw new Error(`ZENMONEY_SERVER must be one of ${Object.keys(ZENMONEY_SERVERS).join(', ')}, got ${zmServer}`);
+  const zmServer = v.safeParse(ZenMoneyServerSchema, requireEnv(env, 'ZENMONEY_SERVER', 'ru'));
+  if (!zmServer.success) {
+    throw new Error(
+      `ZENMONEY_SERVER must be one of ${ZenMoneyServerSchema.options.join(', ')}, got ${env.ZENMONEY_SERVER}`,
+    );
   }
 
   const token = optionalEnv(env, 'TELEGRAM_BOT_TOKEN');
@@ -48,7 +51,7 @@ export function loadConfig(env: Env, readFile: (path: string) => string = readUt
     preferredAspsp: requireEnv(env, 'EB_ASPSP', 'imagin'),
     syncIntervalMs: hours * 3600_000,
     telegram: token && chatId ? { token, chatId } : null,
-    zenmoney: zmToken ? { token: zmToken, server: zmServer as ZenMoneyServer } : null,
+    zenmoney: zmToken ? { token: zmToken, server: zmServer.output } : null,
   };
 }
 

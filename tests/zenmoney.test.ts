@@ -8,8 +8,8 @@ import { openStore } from '../src/storage/sqlite.ts';
 import type { Store } from '../src/storage/types.ts';
 import { normalizeTransactions } from '../src/transactions.ts';
 import { ZenMoneyClient, ZenMoneyError } from '../src/zenmoney/client.ts';
-import { suggestZenAccount, ZenExporter, zmIdFor } from '../src/zenmoney/export.ts';
-import type { ZenMoneyApi, ZmAccount, ZmDiff, ZmSuggestion } from '../src/zenmoney/types.ts';
+import { LAST_EXPORT_KV, suggestZenAccount, ZenExporter, zmIdFor } from '../src/zenmoney/export.ts';
+import type { ZenMoneyApi, ZmAccount, ZmDiff, ZmDiffResponse, ZmSuggestion } from '../src/zenmoney/types.ts';
 import { RecordingNotifier, silentLog, tx } from './helpers.ts';
 
 const NOW = new Date('2026-10-03T12:00:00Z');
@@ -27,23 +27,21 @@ class FakeZen implements ZenMoneyApi {
   suggestions: ZmSuggestion[] = [];
   failDiff: Error | null = null;
 
-  async diff(body: ZmDiff): Promise<ZmDiff> {
+  async diff(body: ZmDiff): Promise<ZmDiffResponse> {
     if (this.failDiff) {
       throw this.failDiff;
     }
     this.diffs.push(body);
     if (body.forceFetch) {
       return {
-        serverTimestamp: NOW_SEC,
         account: ZM_ACCOUNTS,
         instrument: [
           { id: 2, shortTitle: 'RUB' },
           { id: 3, shortTitle: 'EUR' },
         ],
-        user: [{ id: 42, currency: 3, parent: null }],
       };
     }
-    return { serverTimestamp: NOW_SEC };
+    return {};
   }
 
   async suggest(items: { payee: string }[]): Promise<ZmSuggestion[]> {
@@ -185,10 +183,17 @@ describe('ZenExporter', () => {
     expect(notifier.events).toEqual(['export-failed:auth', 'export-recovered']);
     expect(exporter.lastResult()).toMatchObject({ ok: true, exported: 1 });
   });
+
+  it('reads a corrupt stored result as no result', () => {
+    store.setKv(LAST_EXPORT_KV, '{"at":');
+    expect(exporter.lastResult()).toBeNull();
+    store.setKv(LAST_EXPORT_KV, JSON.stringify({ at: 1, ok: 'yes', exported: 0, error: null }));
+    expect(exporter.lastResult()).toBeNull();
+  });
 });
 
 describe('ZenMoneyClient', () => {
-  it('posts with the bearer token to the chosen server and surfaces {error} bodies', async () => {
+  function clientWith(response: () => Response) {
     const calls: { url: string; init: RequestInit }[] = [];
     const client = new ZenMoneyClient({
       token: 'tok',
@@ -196,15 +201,45 @@ describe('ZenMoneyClient', () => {
       now: () => NOW.getTime(),
       fetch: (async (url: URL, init: RequestInit) => {
         calls.push({ url: String(url), init });
-        return Response.json({ error: { code: 'validationError', message: 'Wrong Value' } });
+        return response();
       }) as typeof fetch,
     });
+    return { client, calls };
+  }
+
+  it('posts with the bearer token to the chosen server and surfaces {error} bodies', async () => {
+    const { client, calls } = clientWith(() =>
+      Response.json({ error: { code: 'validationError', message: 'Wrong Value' } }),
+    );
     const err = await client.diff({ serverTimestamp: 1 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ZenMoneyError);
     expect((err as Error).message).toContain('validationError: Wrong Value');
     expect(calls[0]?.url).toBe('https://api.zenmoney.ru/v8/diff/');
     expect((calls[0]?.init.headers as Record<string, string>).authorization).toBe('Bearer tok');
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ serverTimestamp: 1, currentClientTimestamp: NOW_SEC });
+  });
+
+  it('an error of an unexpected shape with HTTP 200 still fails the write', async () => {
+    const { client } = clientWith(() => Response.json({ error: { code: 7 } }));
+    await expect(client.diff({ serverTimestamp: 1, transaction: [] })).rejects.toThrow(ZenMoneyError);
+  });
+
+  it('a plain-text 401 is an auth error', async () => {
+    const { client } = clientWith(() => new Response('Unauthorized', { status: 401 }));
+    const err = await client.suggest([{ payee: 'x' }]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ZenMoneyError);
+    expect(err).toMatchObject({ isAuth: true, message: 'ZenMoney /v8/suggest/ → 401: Unauthorized' });
+  });
+
+  it('parses the tables the exporter reads and rejects a malformed one', async () => {
+    const account = { id: 'a', user: 1, instrument: 3, type: 'ccard', title: 'Card', archive: false, balance: 5 };
+    let body: unknown = { serverTimestamp: 1, account: [account], instrument: [{ id: 3, shortTitle: 'EUR' }] };
+    const { client } = clientWith(() => Response.json(body));
+    expect((await client.diff({ serverTimestamp: 1 })).account).toEqual([
+      { id: 'a', user: 1, instrument: 3, type: 'ccard', title: 'Card', syncID: null, archive: false },
+    ]);
+    body = { account: [{ ...account, title: null }] };
+    await expect(client.diff({ serverTimestamp: 1 })).rejects.toThrow(/unexpected response.*title/s);
   });
 });
 

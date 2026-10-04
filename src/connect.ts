@@ -40,7 +40,10 @@ export function stateNonce(state: string): string {
   return state.split('.', 1)[0] ?? '';
 }
 
-export function accountKeyOf(a: SessionAccount): string {
+/** An account the bank will serve data for: it has a `uid` in this session. */
+type ReadableAccount = SessionAccount & { uid: string };
+
+export function accountKeyOf(a: ReadableAccount): string {
   return a.identification_hash || a.account_id?.iban || a.uid;
 }
 
@@ -86,7 +89,12 @@ export async function completeConnect(
   }
 
   const session = await deps.client.createSession(code);
-  const accounts: AccountInput[] = session.accounts.map((a) => ({
+  // No uid: the bank already knows it can't serve the account (blocked, closed).
+  const readable = session.accounts.filter((a): a is ReadableAccount => Boolean(a.uid));
+  if (readable.length < session.accounts.length) {
+    deps.log.warn({ skipped: session.accounts.length - readable.length }, 'accounts without uid skipped');
+  }
+  const accounts: AccountInput[] = readable.map((a) => ({
     accountKey: accountKeyOf(a),
     uid: a.uid,
     iban: a.account_id?.iban ?? null,

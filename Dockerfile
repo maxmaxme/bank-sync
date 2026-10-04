@@ -5,7 +5,8 @@ WORKDIR /app
 # SQLite is node's built-in `node:sqlite`, so there are no native modules and
 # nothing to compile for arm64.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# --omit=optional: valibot's optional typescript peer would otherwise ship tsc in the image.
+RUN npm ci --omit=dev --omit=optional
 
 COPY tsconfig.json ./
 COPY src ./src

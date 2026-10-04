@@ -1,12 +1,27 @@
-import type { ZenMoneyApi, ZmDiff, ZmSuggestion } from './types.ts';
+import * as v from 'valibot';
+import { parseJson } from '../json.ts';
+import {
+  ZmDiffResponseSchema,
+  ZmSuggestResponseSchema,
+  type ZenMoneyApi,
+  type ZenMoneyServer,
+  type ZmDiff,
+  type ZmDiffResponse,
+  type ZmSuggestion,
+} from './types.ts';
 
-/** A token only works on the server that issued it (zerro.app: `zm_server` in localStorage). */
-export const ZENMONEY_SERVERS = {
+const SERVERS: Record<ZenMoneyServer, string> = {
   ru: 'https://api.zenmoney.ru',
   app: 'https://api.zenmoney.app',
-} as const;
+};
 
-export type ZenMoneyServer = keyof typeof ZENMONEY_SERVERS;
+const ErrorDetailsSchema = v.object({ code: v.optional(v.string()), message: v.optional(v.string()) });
+
+// Errors come back as { error: { code, message } } (or a plain string), sometimes with HTTP 200.
+// Any other non-null `error` still counts: a write must never pass for a success.
+const ErrorBodySchema = v.object({
+  error: v.union([v.string(), ErrorDetailsSchema, v.nonNullish(v.unknown())]),
+});
 
 export class ZenMoneyError extends Error {
   readonly status: number;
@@ -40,23 +55,23 @@ export class ZenMoneyClient implements ZenMoneyApi {
 
   constructor(opts: ZenMoneyClientOptions) {
     this.token = opts.token;
-    this.baseUrl = ZENMONEY_SERVERS[opts.server];
+    this.baseUrl = SERVERS[opts.server];
     this.fetchImpl = opts.fetch ?? fetch;
     this.now = opts.now ?? Date.now;
   }
 
-  diff(body: ZmDiff): Promise<ZmDiff> {
-    return this.post('/v8/diff/', {
+  diff(body: ZmDiff): Promise<ZmDiffResponse> {
+    return this.post(ZmDiffResponseSchema, '/v8/diff/', {
       ...body,
       currentClientTimestamp: Math.floor(this.now() / 1000),
     });
   }
 
   suggest(items: { payee: string }[]): Promise<ZmSuggestion[]> {
-    return this.post('/v8/suggest/', items);
+    return this.post(ZmSuggestResponseSchema, '/v8/suggest/', items);
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  private async post<S extends v.GenericSchema>(schema: S, path: string, body: unknown): Promise<v.InferOutput<S>> {
     const res = await this.fetchImpl(new URL(path, this.baseUrl), {
       method: 'POST',
       headers: {
@@ -67,20 +82,29 @@ export class ZenMoneyClient implements ZenMoneyApi {
       body: JSON.stringify(body),
     });
     const text = await res.text();
-    let parsed: unknown = null;
-    try {
-      parsed = text ? JSON.parse(text) : null;
-    } catch {
-      // Non-JSON error page — handled below.
+    // Non-JSON (a plain "Unauthorized", an error page) parses as undefined.
+    const json = text ? parseJson(text) : undefined;
+    const error = v.safeParse(ErrorBodySchema, json);
+    if (!res.ok || error.success) {
+      const { code, message } = describeError(error.success ? error.output.error : undefined);
+      const what = message ?? (text.slice(0, 300) || res.statusText);
+      throw new ZenMoneyError(res.status, code, `ZenMoney ${path} → ${res.status}${code ? ` ${code}` : ''}: ${what}`);
     }
-    // Errors come back as { error: { code, message } }, sometimes with HTTP 200.
-    const error = (parsed as { error?: { code?: string; message?: string } | string } | null)?.error;
-    if (!res.ok || error) {
-      const code = typeof error === 'object' ? (error.code ?? null) : (error ?? null);
-      const message =
-        (typeof error === 'object' ? error.message : undefined) ?? (text.slice(0, 300) || res.statusText);
-      throw new ZenMoneyError(res.status, code, `ZenMoney ${path} → ${res.status}${code ? ` ${code}` : ''}: ${message}`);
+    const parsed = v.safeParse(schema, json);
+    if (!parsed.success) {
+      const issues = v.summarize(parsed.issues);
+      throw new ZenMoneyError(res.status, null, `ZenMoney ${path}: unexpected response — ${issues}`);
     }
-    return parsed as T;
+    return parsed.output;
   }
+}
+
+function describeError(error: unknown): { code: string | null; message: string | null } {
+  if (typeof error === 'string') {
+    return { code: error, message: null };
+  }
+  const details = v.safeParse(ErrorDetailsSchema, error);
+  return details.success
+    ? { code: details.output.code ?? null, message: details.output.message ?? null }
+    : { code: null, message: null };
 }

@@ -76,7 +76,7 @@ describe('connect flow', () => {
   async function start(): Promise<string> {
     await startConnect(
       deps,
-      { name: 'imagin', country: 'ES', maximum_consent_validity: 180 * 86400 },
+      { name: 'imagin', country: 'ES', maximum_consent_validity: 180 * 86400, beta: false },
       'http://pi.home:8085',
     );
     return (startAuthArgs[0] as { state: string }).state;
@@ -98,6 +98,14 @@ describe('connect flow', () => {
       { accountKey: 'hash-A', uid: 'uid-1', iban: 'ES0021000000000000000001' },
     ]);
     expect(syncs).toEqual(['connect']);
+  });
+
+  it('skips accounts the bank gave no uid for (blocked or closed)', async () => {
+    const closed = { identification_hash: 'hash-B', currency: 'EUR' };
+    deps.client.createSession = async () => ({ ...SESSION, accounts: [...SESSION.accounts, closed] });
+    const res = await completeConnect(deps, new URLSearchParams({ code: 'c', state: await start() }));
+    expect(res.accounts).toBe(1);
+    expect(store.listAccounts().map((a) => a.accountKey)).toEqual(['hash-A']);
   });
 
   it('refuses a replayed or unknown state', async () => {

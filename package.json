@@ -15,7 +15,8 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "pino": "^9.4.0"
+    "pino": "^9.4.0",
+    "valibot": "^1.5.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
