@@ -53,11 +53,12 @@ function fmtTime(ms: number | null): string {
   return new Date(ms).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
 }
 
+/** Every amount on the page goes through here: rendered twice, real and masked; the eye toggle picks one. */
 function money(cents: number | null, currency: string | null): string {
   if (cents === null) {
     return '—';
   }
-  return `${formatCents(cents)} ${e(currency ?? '')}`;
+  return `<span class="money"><span class="real">${formatCents(cents)} ${e(currency ?? '')}</span><span class="masked">••••</span></span>`;
 }
 
 function maskIban(iban: string | null): string {
@@ -218,6 +219,9 @@ function transactionsSection(m: PageModel): string {
     <p class="small"><a href="/export.csv">CSV</a> · <a href="/api/transactions">JSON</a> · <a href="/api/accounts">accounts (JSON)</a></p>`;
 }
 
+const EYE_PATH = '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>';
+const EYE = `<svg class="open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${EYE_PATH}</svg><svg class="closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${EYE_PATH}<path d="M3 3l18 18"/></svg>`;
+
 export function renderPage(m: PageModel): string {
   const flash = m.flash ? `<div class="flash ${m.flash.kind}">${e(m.flash.text)}</div>` : '';
   const warning = m.setupWarning ? `<div class="flash err">${e(m.setupWarning)}</div>` : '';
@@ -261,10 +265,19 @@ export function renderPage(m: PageModel): string {
   tr.pending td { opacity:.7; }
   .tag { font-size:.75rem; padding:1px 6px; border-radius:6px; border:1px solid var(--line); color:var(--muted); }
   code { font-size:.85em; }
+  .money .masked, .hide-money .money .real, .eye .closed, .hide-money .eye .open { display:none; }
+  .hide-money .money .masked, .hide-money .eye .closed { display:inline; }
+  .hide-money .money .masked { color:var(--muted); } /* not green for money in either */
+  h1 .eye { padding:0 6px; vertical-align:middle; color:var(--muted); text-decoration:none; }
+  .eye svg { width:20px; height:20px; vertical-align:middle; }
 </style>
+<script>
+  // Before first paint, so hidden amounts never flash. Storage may be blocked — then amounts just show.
+  try { if (localStorage.getItem('bank-sync:hide-money') === '1') document.documentElement.classList.add('hide-money'); } catch {}
+</script>
 </head>
 <body><main>
-<h1>bank-sync</h1>
+<h1>bank-sync <button type="button" class="link eye" id="eye" title="Show / hide amounts" aria-label="Show or hide amounts">${EYE}</button></h1>
 ${warning}${flash}
 <h2>Banks</h2>
 ${sessionsSection(m)}
@@ -277,6 +290,13 @@ ${zenSection(m)}
 ${connectSection(m)}
 <h2>Recent transactions</h2>
 ${transactionsSection(m)}
-</main></body>
+</main>
+<script>
+  document.getElementById('eye').addEventListener('click', () => {
+    const hidden = document.documentElement.classList.toggle('hide-money');
+    try { localStorage.setItem('bank-sync:hide-money', hidden ? '1' : '0'); } catch {}
+  });
+</script>
+</body>
 </html>`;
 }

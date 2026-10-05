@@ -81,6 +81,35 @@ describe('web app', () => {
     expect(html).toContain('No bank connected yet');
   });
 
+  it('can hide every amount on the page: each one has a masked twin, none is printed bare', async () => {
+    store.saveSession(
+      {
+        sessionId: 's1',
+        aspspName: 'imagin',
+        aspspCountry: 'ES',
+        validUntil: '2027-01-01T00:00:00Z',
+        createdAt: 0,
+        revokedAt: null,
+      },
+      [{ accountKey: 'hash-A', uid: 'u', iban: null, name: null, currency: 'EUR' }],
+    );
+    store.recordAccountSync('hash-A', { ok: true, balanceCents: 98_765, balanceCurrency: 'EUR' }, 0);
+    store.applyTransactions('hash-A', '2026-01-01', normalizeTransactions([tx()]), 0);
+    const html = await (await fetch(base + '/')).text();
+
+    const amounts = [
+      ...html.matchAll(
+        /<span class="money"><span class="real">([^<]*)<\/span><span class="masked">••••<\/span><\/span>/g,
+      ),
+    ];
+    expect(amounts.map((m) => m[1])).toEqual(['987.65 EUR', '-12.34 EUR']);
+    const rest = html.replaceAll(/<span class="money">.*?<\/span><\/span>/g, '');
+    expect(rest).not.toMatch(/987\.65|12\.34/);
+    // The eye toggles a class remembered in localStorage, applied before the first paint.
+    expect(html).toMatch(/<head>[\s\S]*localStorage\.getItem\('bank-sync:hide-money'\)[\s\S]*<\/head>/);
+    expect(html).toContain('id="eye"');
+  });
+
   it('starts auth with the forwarded host encoded in state and redirects to the bank', async () => {
     const res = await post('/connect', { aspsp: 'imagin' }, { 'x-forwarded-host': 'pi.home:8085' });
     expect(res.status).toBe(303);
