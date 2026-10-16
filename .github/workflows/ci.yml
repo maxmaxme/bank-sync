@@ -83,5 +83,9 @@ jobs:
           tags: |
             ghcr.io/maxmaxme/bank-sync:latest
             ghcr.io/maxmaxme/bank-sync:sha-${{ steps.sha.outputs.short }}
+          # The host's updater reads these to list the commits between the old and new image.
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
