@@ -81,8 +81,8 @@ function sessionsSection(m: PageModel): string {
     .map((s) => {
       const left = daysLeft(s.validUntil, m.now);
       const status =
-        left < 0
-          ? '<span class="bad">expired — reconnect</span>'
+        Date.parse(s.validUntil) <= m.now.getTime()
+          ? '<span class="bad">expired — <a href="#connect">reconnect</a></span>'
           : `until ${e(s.validUntil.slice(0, 10))} <span class="${left <= 7 ? 'bad' : 'muted'}">(${left} days)</span>`;
       return `<li><b>${e(s.aspspName)}</b> — access ${status}
         <form method="post" action="/sessions/${encodeURIComponent(s.sessionId)}/delete" class="inline"
@@ -104,7 +104,7 @@ function accountsSection(m: PageModel): string {
         <div class="row"><b>${e(a.name ?? a.aspspName)}</b><span class="muted">${e(maskIban(a.iban))}</span></div>
         <div class="balance">${money(a.balanceCents, a.balanceCurrency)}</div>
         <div class="muted small">synced: ${fmtTime(a.lastSyncedAt)}</div>
-        ${a.lastError ? `<div class="bad small">${e(a.lastError)}</div>` : ''}
+        ${a.lastError ? `<div class="err">${e(a.lastError)}</div>` : ''}
       </div>`,
     )
     .join('');
@@ -112,11 +112,12 @@ function accountsSection(m: PageModel): string {
 }
 
 function syncSection(m: PageModel): string {
+  // Only the newest run spells out its error: older ones are history, and once a run succeeds nothing red stays.
   const runs = m.runs
     .map(
-      (r) => `<li>${fmtTime(r.startedAt)} · ${e(r.trigger)} ·
+      (r, i) => `<li>${fmtTime(r.startedAt)} · ${e(r.trigger)} ·
         ${r.ok === null ? 'running…' : r.ok ? `ok, new: ${r.added ?? 0}` : `<span class="bad">failed</span>`}
-        ${r.error ? `<div class="bad small pre">${e(r.error)}</div>` : ''}</li>`,
+        ${r.error && i === 0 ? `<div class="err pre">${e(r.error)}</div>` : ''}</li>`,
     )
     .join('');
   return `
@@ -242,9 +243,10 @@ export function renderPage(m: PageModel): string {
   h1 { font-size:1.2rem; margin:0 0 12px; }
   h2 { font-size:1rem; margin:24px 0 8px; color:var(--muted); font-weight:600; }
   a { color:var(--accent); }
-  .muted { color:var(--muted); } .bad { color:var(--bad); } .good { color:var(--good); }
-  .small { font-size:.85rem; } .nowrap { white-space:nowrap; } .pre { white-space:pre-wrap; }
-  .flash { padding:10px 12px; border-radius:8px; margin-bottom:12px; background:var(--card); border:1px solid var(--line); }
+  .muted { color:var(--muted); } .bad { color:var(--bad); overflow-wrap:anywhere; } .good { color:var(--good); }
+  .small { font-size:.85rem; } .nowrap { white-space:nowrap; } .pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+  .err { margin-top:6px; padding:6px 8px; border-radius:6px; font-size:.85rem; color:var(--bad); background:color-mix(in srgb, var(--bad) 12%, transparent); overflow-wrap:anywhere; }
+  .flash { overflow-wrap:anywhere; padding:10px 12px; border-radius:8px; margin-bottom:12px; background:var(--card); border:1px solid var(--line); }
   .flash.err { border-color:var(--bad); color:var(--bad); }
   .flash.ok { border-color:var(--good); }
   .cards { display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
@@ -286,7 +288,7 @@ ${accountsSection(m)}
 ${syncSection(m)}
 <h2>ZenMoney</h2>
 ${zenSection(m)}
-<h2>Connect a bank</h2>
+<h2 id="connect">Connect a bank</h2>
 ${connectSection(m)}
 <h2>Recent transactions</h2>
 ${transactionsSection(m)}

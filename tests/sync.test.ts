@@ -105,6 +105,20 @@ describe('Syncer', () => {
     expect(store.listAccounts()[0]?.lastError).toContain('slow down');
   });
 
+  it('an expired session lapses the consent so the scheduler stops spending quota', async () => {
+    api.failWith = new EnableBankingError(
+      401,
+      'EXPIRED_SESSION',
+      'Enable Banking GET /accounts/uid-1/transactions → 401',
+    );
+    const summary = await new Syncer(deps).run('schedule');
+
+    expect(summary.accounts[0]?.error).toBe('The bank ended access early — reconnect it');
+    expect(store.activeAccounts(NOW.getTime())).toHaveLength(0);
+    expect(store.listSessions()[0]?.validUntil).toBe(NOW.toISOString());
+    expect(store.recentSyncRuns(1)[0]?.error).toBe('hash-A: The bank ended access early — reconnect it');
+  });
+
   it('notifies once on failure and once on recovery', async () => {
     const syncer = new Syncer(deps);
     api.failWith = new Error('bank down');

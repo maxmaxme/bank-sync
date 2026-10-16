@@ -89,6 +89,8 @@ export interface Store {
 
   saveSession(session: SessionRow, accounts: AccountInput[]): void;
   revokeSession(sessionId: string, now: number): void;
+  /** The bank ended the consent early: treat it as lapsed from `now` on. */
+  expireSession(sessionId: string, now: number): void;
   listSessions(): SessionRow[];
 
   /** Accounts whose consent is neither revoked nor expired. */

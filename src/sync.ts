@@ -32,6 +32,8 @@ export interface SyncDeps {
 
 interface AccountSyncResult {
   accountKey: string;
+  /** For people: the key is an opaque hash. */
+  label: string;
   added: number;
   error: string | null;
 }
@@ -60,6 +62,10 @@ export function pickBalance(balances: readonly Balance[]): Balance | null {
     }
   }
   return balances[0] ?? null;
+}
+
+function accountLabel(a: AccountRow): string {
+  return a.iban ? `…${a.iban.slice(-4)}` : (a.name ?? a.accountKey);
 }
 
 async function fetchAllTransactions(
@@ -123,6 +129,28 @@ async function syncAccount(deps: SyncDeps, account: AccountRow): Promise<number>
   return added;
 }
 
+async function syncOne(deps: SyncDeps, account: AccountRow): Promise<AccountSyncResult> {
+  const label = accountLabel(account);
+  try {
+    const added = await syncAccount(deps, account);
+    return { accountKey: account.accountKey, label, added, error: null };
+  } catch (err) {
+    // Banks may end a consent long before valid_until; retrying can't help, only a reconnect.
+    const expired = err instanceof EnableBankingError && err.code === 'EXPIRED_SESSION';
+    if (expired) {
+      deps.store.expireSession(account.sessionId, deps.now().getTime());
+    }
+    const error = expired
+      ? 'The bank ended access early — reconnect it'
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    deps.log.error({ err, accountKey: account.accountKey }, 'account sync failed');
+    deps.store.recordAccountSync(account.accountKey, { ok: false, error }, deps.now().getTime());
+    return { accountKey: account.accountKey, label, added: 0, error };
+  }
+}
+
 /**
  * Runs every active account once. Concurrent callers share the in-flight run
  * instead of starting a second one — each run spends the bank's daily quota.
@@ -156,15 +184,7 @@ export class Syncer {
 
     const results: AccountSyncResult[] = [];
     for (const account of store.activeAccounts(startedAt)) {
-      try {
-        const added = await syncAccount(this.deps, account);
-        results.push({ accountKey: account.accountKey, added, error: null });
-      } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
-        log.error({ err, accountKey: account.accountKey }, 'account sync failed');
-        store.recordAccountSync(account.accountKey, { ok: false, error }, this.deps.now().getTime());
-        results.push({ accountKey: account.accountKey, added: 0, error });
-      }
+      results.push(await syncOne(this.deps, account));
     }
 
     const failures = results.filter((r) => r.error !== null);
@@ -178,7 +198,7 @@ export class Syncer {
       {
         ok: summary.ok,
         added: summary.added,
-        error: failures.map((f) => `${f.accountKey}: ${f.error}`).join('\n') || null,
+        error: failures.map((f) => `${f.label}: ${f.error}`).join('\n') || null,
       },
       this.deps.now().getTime(),
     );

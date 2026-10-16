@@ -240,6 +240,14 @@ export function openStore(path: string): Store {
       db.prepare('UPDATE sessions SET revoked_at = ? WHERE session_id = ?').run(now, sessionId);
     },
 
+    expireSession(sessionId, now) {
+      db.prepare('UPDATE sessions SET valid_until = ? WHERE session_id = ? AND valid_until > ?').run(
+        new Date(now).toISOString(),
+        sessionId,
+        new Date(now).toISOString(),
+      );
+    },
+
     listSessions() {
       const rows = all(DbSessionSchema, db.prepare('SELECT * FROM sessions ORDER BY created_at DESC').all());
       return rows.map(toSession);
