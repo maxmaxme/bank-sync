@@ -72,4 +72,9 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE transactions ADD COLUMN zm_id TEXT;
   ALTER TABLE transactions ADD COLUMN zm_pushed_at INTEGER;
   `,
+  `
+  -- Reconnects used to leave the old session listed after its accounts moved on.
+  UPDATE sessions SET revoked_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+  WHERE revoked_at IS NULL AND session_id NOT IN (SELECT session_id FROM accounts);
+  `,
 ];

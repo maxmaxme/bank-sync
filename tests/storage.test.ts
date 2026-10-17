@@ -1,3 +1,7 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openStore } from '../src/storage/sqlite.ts';
 import { normalizeTransactions } from '../src/transactions.ts';
@@ -54,6 +58,23 @@ describe('sessions and accounts', () => {
         ['s2', null],
       ]),
     );
+  });
+
+  it('the migration retires sessions a reconnect already emptied', () => {
+    // A DB from before the fix: s0 lost its account to s1 but was never revoked.
+    store.close();
+    const path = join(mkdtempSync(join(tmpdir(), 'bank-sync-')), 'db.sqlite');
+    store = openStore(path);
+    connect('s1', 'uid-1');
+    store.close();
+    const raw = new DatabaseSync(path);
+    raw.exec(`INSERT INTO sessions VALUES ('s0', 'imagin', 'ES', '2027-04-01T00:00:00Z', 0, NULL);
+      PRAGMA user_version = 2;`);
+    raw.close();
+
+    store = openStore(path);
+    const revoked = Object.fromEntries(store.listSessions().map((x) => [x.sessionId, x.revokedAt !== null]));
+    expect(revoked).toEqual({ s0: true, s1: false });
   });
 
   it('excludes revoked and expired consents from active accounts', () => {
