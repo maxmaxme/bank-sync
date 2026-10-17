@@ -233,6 +233,11 @@ export function openStore(path: string): Store {
             currency: a.currency,
           });
         }
+        // A reconnect moves every account over; the old consent has nothing left to show or sync.
+        db.prepare(
+          `UPDATE sessions SET revoked_at = ?
+           WHERE revoked_at IS NULL AND session_id != ? AND session_id NOT IN (SELECT session_id FROM accounts)`,
+        ).run(session.createdAt, session.sessionId);
       });
     },
 

@@ -45,6 +45,17 @@ describe('sessions and accounts', () => {
     expect(acc).toMatchObject({ uid: 'uid-2', sessionId: 's2', initialSyncDone: false, balanceCents: 100 });
   });
 
+  it('retires the old session once a reconnect has taken all its accounts', () => {
+    connect('s1', 'uid-1');
+    connect('s2', 'uid-2');
+    expect(store.listSessions().map((x) => [x.sessionId, x.revokedAt])).toEqual(
+      expect.arrayContaining([
+        ['s1', T0],
+        ['s2', null],
+      ]),
+    );
+  });
+
   it('excludes revoked and expired consents from active accounts', () => {
     connect('s1', 'uid-1', '2026-10-02T00:00:00Z');
     expect(store.activeAccounts(T0)).toHaveLength(0);
