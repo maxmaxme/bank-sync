@@ -89,12 +89,31 @@ describe('Syncer', () => {
     ]);
   });
 
-  it('falls back to 90 days when the bank rejects the long window', async () => {
+  it('falls back to 89 days when the bank rejects the long window', async () => {
     api.failWith = new EnableBankingError(400, 'WRONG_TRANSACTIONS_PERIOD', 'too far back');
     api.failOnce = true;
     const summary = await new Syncer(deps).run('connect');
     expect(summary.ok).toBe(true);
-    expect(api.txCalls.map((c) => c.dateFrom)).toEqual(['2024-10-03', '2026-07-05']);
+    expect(api.txCalls.map((c) => c.dateFrom)).toEqual(['2024-10-03', '2026-07-06']);
+  });
+
+  it('later syncs of an empty account stay within the 90-day cap', async () => {
+    const syncer = new Syncer(deps);
+    await syncer.run('connect');
+    api.txCalls.length = 0;
+    await syncer.run('schedule');
+    expect(api.txCalls).toEqual([
+      { uid: 'uid-1', dateFrom: '2026-07-06', continuationKey: undefined, strategy: 'default' },
+    ]);
+  });
+
+  it('later syncs of an idle account are clamped to the 90-day cap', async () => {
+    api.pages = [{ transactions: [tx({ entry_reference: 'a', booking_date: '2026-03-01' })] }];
+    const syncer = new Syncer(deps);
+    await syncer.run('connect');
+    api.txCalls.length = 0;
+    await syncer.run('schedule');
+    expect(api.txCalls.map((c) => c.dateFrom)).toEqual(['2026-07-06']);
   });
 
   it('does not retry a rate-limited first sync', async () => {

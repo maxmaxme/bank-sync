@@ -86,8 +86,10 @@ concurrent calls. Don't add retries that hit the bank in a loop.
 
 **First sync is special.** Banks serve deep history only shortly after
 consent: `initial_sync_done = 0` (reset on every re-consent) → 730 days
-with `strategy=longest`, falling back to 90 days on a 4xx (not on rate
-limit). Later syncs re-read from newest booked date − `OVERLAP_DAYS`.
+with `strategy=longest`, falling back to 89 days on a 4xx (not on rate
+limit). Later syncs re-read from newest booked date − `OVERLAP_DAYS`,
+never further back than 89 days (PSD2's 90-day unattended cap, counted in
+the bank's timezone, which runs ahead of UTC).
 Pending rows in the re-read window are deleted and re-inserted.
 
 **Redirect flow.** `state = <nonce>.<base64url(returnBase)>`. The nonce
