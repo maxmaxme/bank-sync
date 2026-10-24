@@ -8,8 +8,12 @@ import type { Logger } from './logger.ts';
 
 /** First sync after a consent asks for this much; banks clamp it to what they keep. */
 const INITIAL_HISTORY_DAYS = 730;
-/** Fallback when a bank rejects the long window outright. */
-const FALLBACK_HISTORY_DAYS = 90;
+/**
+ * PSD2 caps unattended reads at 90 days: the fallback when a bank rejects the long window,
+ * and the floor for every later sync. 89, not 90: the bank counts days in its own timezone,
+ * which is ahead of UTC (imagin rejects today-90 right after Madrid midnight).
+ */
+const FALLBACK_HISTORY_DAYS = 89;
 /** Re-read this many days before the newest booked row: late bookings, pending → booked. */
 const OVERLAP_DAYS = 10;
 const MAX_PAGES = 200;
@@ -92,9 +96,12 @@ async function syncAccount(deps: SyncDeps, account: AccountRow): Promise<number>
   const now = deps.now();
   const today = isoDate(now);
   const latest = deps.store.latestTxDate(account.accountKey);
-  const initial = !account.initialSyncDone || latest === null;
+  const initial = !account.initialSyncDone;
+  // An account with no booked rows (or idle for months) would otherwise ask past the cap.
+  const floor = addDays(today, -FALLBACK_HISTORY_DAYS);
+  const sinceLatest = latest === null ? floor : addDays(latest, -OVERLAP_DAYS);
 
-  let dateFrom = initial ? addDays(today, -INITIAL_HISTORY_DAYS) : addDays(latest, -OVERLAP_DAYS);
+  let dateFrom = initial ? addDays(today, -INITIAL_HISTORY_DAYS) : sinceLatest > floor ? sinceLatest : floor;
   let txs: Transaction[];
   try {
     txs = await fetchAllTransactions(deps.api, account.uid, dateFrom, initial ? 'longest' : 'default');
